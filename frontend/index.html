@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Academic Copilot — Academic Pathway Intelligence</title>
+  <meta name="description" content="AI-powered academic pathway and prerequisite intelligence dashboard.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            primary: "#6366F1",
+            "primary-soft": "#818CF8",
+            secondary: "#06B6D4",
+            violet: "#8B5CF6",
+            success: "#10B981",
+            warning: "#F59E0B",
+            danger: "#F43F5E",
+            bg: "#0B0F17",
+            panel: "#111827",
+            surface: "#151B26",
+            muted: "#94A3B8"
+          },
+          fontFamily: {
+            sans: ["Inter", "sans-serif"],
+            display: ["Plus Jakarta Sans", "sans-serif"]
+          }
+        }
+      }
+    };
+  </script>
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+
+<body class="min-h-screen bg-bg text-slate-100 antialiased">
+  <div class="app-orb orb-one"></div>
+  <div class="app-orb orb-two"></div>
+  <div class="app-grid"></div>
+
+  <header class="sticky top-0 z-40 border-b border-white/10 bg-[#0B0F17]/85 backdrop-blur-xl">
+    <div class="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-6">
+      <a href="#dashboard" class="flex min-w-0 items-center gap-3">
+        <div class="brand-icon">
+          <i data-lucide="brain-circuit" class="h-5 w-5"></i>
+        </div>
+        <div class="min-w-0">
+          <div class="font-display text-[15px] font-bold tracking-tight sm:text-base">Academic Copilot</div>
+          <div class="hidden text-[10px] font-semibold tracking-wide text-cyan-300 sm:block">Academic Pathway Intelligence</div>
+        </div>
+      </a>
+
+      <nav data-student-only class="hidden items-center gap-1 lg:flex" aria-label="Primary">
+        <a class="nav-link active" href="#dashboard">Dashboard</a>
+        <button class="nav-link" id="nav-graph-btn" type="button">Curriculum Graph</button>
+        <a class="nav-link" href="#audit">Audit Matrix</a>
+        <button class="nav-link" id="nav-copilot-btn" type="button">Copilot Chat</button>
+      </nav>
+
+      <div class="flex items-center gap-2">
+        <div class="demo-role-wrap" title="Demo role switcher for capstone role-based workflow">
+          <span class="demo-role-label">View as</span>
+          <select id="demo-role-select" class="demo-role-select" aria-label="Demo role">
+            <option value="Student">Student</option>
+            <option value="Advisor">Advisor</option>
+            <option value="Coordinator">Coordinator</option>
+          </select>
+        </div>
+
+        <button id="backend-status-toggle" type="button" class="status-pill" title="Check backend connectivity">
+          <span id="backend-dot" class="status-dot bg-slate-500"></span>
+          <span id="backend-status-text">Checking backend...</span>
+        </button>
+
+        <div class="relative">
+          <button id="user-profile-btn" type="button" class="profile-btn" aria-haspopup="true" aria-expanded="false">
+            <span id="avatar-initials" class="avatar">KA</span>
+            <span class="hidden text-left sm:block">
+              <span id="display-user-name" class="block text-xs font-semibold">Kanhai</span>
+              <span id="display-user-track" class="block text-[10px] text-cyan-300">AI & Data Science</span>
+            </span>
+            <i data-lucide="chevron-down" class="h-3.5 w-3.5 text-slate-400"></i>
+          </button>
+
+          <div id="user-dropdown-menu" class="dropdown-panel hidden">
+            <div class="mb-2 px-3 pt-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Switch student</div>
+            <div id="student-options" class="space-y-1"></div>
+            <div class="mt-2 grid grid-cols-2 gap-2 border-t border-white/10 pt-2">
+              <button id="view-student-btn" type="button" class="student-menu-action"><i data-lucide="user-round" class="h-3.5 w-3.5"></i> View Details</button>
+              <button id="add-student-btn" type="button" class="student-menu-action"><i data-lucide="user-plus" class="h-3.5 w-3.5"></i> Add Student</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main id="dashboard" class="relative z-10 mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:py-8">
+    <div class="grid grid-cols-1 items-start gap-6 lg:grid-cols-12 lg:gap-7">
+      <section id="main-content-column" class="space-y-6 lg:col-span-12">
+        <!-- Hero -->
+        <section id="student-dashboard-hero" data-student-only class="glass-panel hero-panel relative overflow-hidden rounded-2xl p-5 sm:p-7">
+          <div class="pointer-events-none absolute -right-16 -top-20 h-64 w-64 rounded-full bg-indigo-500/10 blur-3xl"></div>
+          <div class="pointer-events-none absolute -bottom-24 right-1/4 h-52 w-52 rounded-full bg-cyan-400/10 blur-3xl"></div>
+
+          <div class="relative z-10 flex flex-col justify-between gap-6 md:flex-row md:items-center">
+            <div>
+              <div class="mb-3 flex flex-wrap items-center gap-2">
+                <span id="summary-track" class="badge badge-indigo">Track: AI & Data Science</span>
+                <span id="summary-semester" class="badge badge-slate">Semester 4 of 8</span>
+                <span class="badge badge-success"><span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-400"></span>On Track</span>
+              </div>
+              <h1 class="font-display text-3xl font-extrabold tracking-tight text-white sm:text-4xl">Good evening, <span id="hero-user-name">Kanhai</span></h1>
+              <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+                Let's plan your next academic move. Your eligibility is calculated from the live course prerequisite graph.
+              </p>
+            </div>
+
+            <div class="flex min-w-[215px] items-center gap-4 rounded-xl border border-white/10 bg-black/30 p-4">
+              <div class="progress-ring" id="progress-ring" style="--progress:0%">
+                <span id="progress-text">0%</span>
+              </div>
+              <div>
+                <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Degree Complete</div>
+                <div class="mt-0.5 font-display text-2xl font-bold"><span id="credits-earned">0</span> <span class="text-sm font-normal text-slate-500">/ <span id="credits-required">120</span> cr</span></div>
+                <div id="progress-caption" class="mt-1 text-[10px] font-semibold text-cyan-300">Live audit calculation</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Stats -->
+        <section id="student-stats" data-student-only class="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Academic overview">
+          <div class="glass-panel stat-card">
+            <div class="flex items-center justify-between">
+              <span class="stat-label">Completed</span>
+              <span class="stat-icon text-emerald-300 bg-emerald-400/10"><i data-lucide="check-circle" class="h-4 w-4"></i></span>
+            </div>
+            <div id="count-completed" class="stat-value">0</div>
+            <div class="stat-caption text-emerald-300">Validated courses</div>
+          </div>
+          <div class="glass-panel stat-card stat-accent-cyan">
+            <div class="flex items-center justify-between">
+              <span class="stat-label text-cyan-300">Eligible Now</span>
+              <span class="stat-icon text-cyan-300 bg-cyan-400/10"><i data-lucide="unlock" class="h-4 w-4"></i></span>
+            </div>
+            <div id="count-eligible" class="stat-value">0</div>
+            <div class="stat-caption text-cyan-300">Immediate enrollment</div>
+          </div>
+          <div class="glass-panel stat-card">
+            <div class="flex items-center justify-between">
+              <span class="stat-label">Locked</span>
+              <span class="stat-icon text-amber-300 bg-amber-400/10"><i data-lucide="lock" class="h-4 w-4"></i></span>
+            </div>
+            <div id="count-locked" class="stat-value">0</div>
+            <div class="stat-caption text-amber-300">Prerequisites pending</div>
+          </div>
+          <div class="glass-panel stat-card">
+            <div class="flex items-center justify-between">
+              <span class="stat-label">Credits Earned</span>
+              <span class="stat-icon text-indigo-300 bg-indigo-400/10"><i data-lucide="award" class="h-4 w-4"></i></span>
+            </div>
+            <div class="stat-value"><span id="credits-stat">0</span> / 120</div>
+            <div id="credits-percent" class="stat-caption text-indigo-300">0% of degree target</div>
+          </div>
+        </section>
+
+        <!-- Recommendation dashboard -->
+        <section id="recommendations" data-student-only class="glass-panel rounded-2xl p-4 sm:p-6">
+          <div class="flex flex-col gap-4 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div class="flex flex-wrap items-center gap-2">
+                <h2 class="font-display text-lg font-bold sm:text-xl">Recommendation Dashboard</h2>
+                <span class="api-chip">GET /copilot/recommendations/<span id="recommendation-user-code">1</span></span>
+              </div>
+              <p class="mt-1 text-xs text-slate-500">Transparent next-step recommendations calculated from your live curriculum graph and academic record.</p>
+            </div>
+            <button id="refresh-recommendations-btn" type="button" class="secondary-btn">
+              <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i> Refresh recommendations
+            </button>
+          </div>
+
+          <div id="recommendation-loading" class="mt-5 hidden">
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div class="skeleton h-40 rounded-xl"></div>
+              <div class="skeleton h-40 rounded-xl"></div>
+            </div>
+          </div>
+
+          <div id="recommendation-error" class="mt-5 hidden error-state">
+            <i data-lucide="triangle-alert" class="h-6 w-6"></i>
+            <div><h3>Recommendations unavailable</h3><p id="recommendation-error-text">Unable to calculate recommendations.</p></div>
+          </div>
+
+          <div id="recommendation-content" class="mt-5 space-y-5">
+            <div>
+              <div class="section-heading">
+                <div class="section-heading-left"><span class="section-dot bg-violet-400"></span><h3>Next best actions</h3><span class="section-badge violet">Rule-based</span></div>
+                <span id="recommendation-count" class="text-[10px] font-semibold text-slate-500">—</span>
+              </div>
+              <div id="recommendation-list" class="recommendation-grid"></div>
+            </div>
+
+            <div id="blocker-section" class="hidden">
+              <div class="section-heading">
+                <div class="section-heading-left"><span class="section-dot bg-amber-400"></span><h3>Pathway blockers</h3><span class="section-badge amber">Prerequisite leverage</span></div>
+              </div>
+              <div id="blocker-list" class="blocker-grid"></div>
+            </div>
+
+            <div class="recommendation-method">
+              <div class="flex items-start gap-2"><i data-lucide="shield-check" class="mt-0.5 h-4 w-4 text-emerald-300"></i><div><strong>How recommendations are calculated</strong><p id="recommendation-methodology">Current eligibility, semester fit, downstream unlock impact, and shared prerequisite blockers. No AI or subjective career ranking is used.</p></div></div>
+              <span class="source-pill"><i data-lucide="database" class="h-3 w-3"></i> Neo4j + MySQL</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Advisor approval + audit trail — Phase 3 -->
+        <section id="advisor-workflow" class="glass-panel rounded-2xl p-4 sm:p-6">
+          <div class="flex flex-col gap-4 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div class="flex flex-wrap items-center gap-2">
+                <h2 class="font-display text-lg font-bold sm:text-xl">Advisor Approval &amp; Audit Trail</h2>
+                <span class="api-chip">Human-governed workflow</span>
+              </div>
+              <p class="mt-1 text-xs text-slate-500">Recommendations can be reviewed by an advisor before they become an approved academic decision.</p>
+            </div>
+            <button id="refresh-advisor-btn" type="button" class="secondary-btn"><i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i> Refresh</button>
+          </div>
+
+          <div class="mt-4 flex flex-wrap items-center gap-2">
+            <span id="workflow-role-badge" class="workflow-role-badge student"><i data-lucide="user-round" class="h-3.5 w-3.5"></i> Student view</span>
+            <span class="workflow-rule"><i data-lucide="shield-check" class="h-3.5 w-3.5"></i> AI recommends • human approves</span>
+          </div>
+
+          <div id="student-approval-view" class="mt-5">
+            <div class="section-heading"><div class="section-heading-left"><span class="section-dot bg-cyan-400"></span><h3>My approval requests</h3><span class="section-badge">Student</span></div><span id="student-request-count" class="text-[10px] text-slate-500">0</span></div>
+            <div id="student-request-list" class="approval-list"></div>
+          </div>
+
+          <div id="advisor-review-view" class="mt-5 hidden">
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div class="workflow-stat"><span>Pending</span><strong id="approval-pending-count">0</strong></div>
+              <div class="workflow-stat"><span>Approved</span><strong id="approval-approved-count">0</strong></div>
+              <div class="workflow-stat"><span>Rejected</span><strong id="approval-rejected-count">0</strong></div>
+              <div class="workflow-stat"><span>Changes</span><strong id="approval-changes-count">0</strong></div>
+            </div>
+            <div class="section-heading mt-5"><div class="section-heading-left"><span class="section-dot bg-amber-400"></span><h3>Requests awaiting review</h3><span class="section-badge amber">Advisor gate</span></div></div>
+            <div id="advisor-request-list" class="approval-list"></div>
+          </div>
+
+          <div id="advisor-student-view" class="mt-5 hidden">
+            <div class="section-heading">
+              <div class="section-heading-left"><span class="section-dot bg-cyan-400"></span><h3>Student Academic Overview</h3><span class="section-badge cyan">Advisor / Coordinator</span></div>
+            </div>
+            <div class="advisor-student-toolbar">
+              <label class="form-label flex-1">Select student
+                <select id="advisor-student-select" class="input-field"></select>
+              </label>
+              <button id="refresh-student-overview-btn" type="button" class="secondary-btn self-end"><i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i> Refresh student</button>
+            </div>
+            <div id="advisor-student-loading" class="hidden py-6 text-center"><div class="spinner mx-auto"></div><p class="mt-2 text-xs text-slate-500">Loading academic snapshot...</p></div>
+            <div id="advisor-student-overview" class="mt-4"></div>
+          </div>
+
+          <div id="audit-view" class="mt-5">
+            <div class="section-heading"><div class="section-heading-left"><span class="section-dot bg-violet-400"></span><h3>Decision audit trail</h3><span class="section-badge violet">Traceable</span></div><span id="audit-event-count" class="text-[10px] text-slate-500">0 events</span></div>
+            <div id="audit-trail-list" class="audit-list"></div>
+          </div>
+
+          <div class="workflow-note mt-4"><i data-lucide="info" class="h-4 w-4 shrink-0 text-cyan-300"></i><span><strong>Governance boundary:</strong> Copilot recommendations are advisory. Approval is a separate human action, and every request/decision is recorded in the audit trail.</span></div>
+        </section>
+
+        <!-- Course intelligence -->
+        <section id="audit" data-student-only class="glass-panel rounded-2xl p-4 sm:p-6">
+          <div class="flex flex-col gap-4 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div class="flex flex-wrap items-center gap-2">
+                <h2 class="font-display text-lg font-bold sm:text-xl">Course Intelligence & Eligibility</h2>
+                <span class="api-chip">GET /students/<span id="audit-user-code">1</span>/audit</span>
+              </div>
+              <p class="mt-1 text-xs text-slate-500">Live course audit with prerequisite fulfillment from the graph engine.</p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button id="open-what-if-btn" type="button" class="primary-btn">
+                <i data-lucide="flask-conical" class="h-4 w-4"></i>
+                What-If Simulator
+              </button>
+              <button id="trigger-visualizer-btn" type="button" class="secondary-btn">
+                <i data-lucide="git-branch" class="h-4 w-4"></i>
+                Interactive Graph
+              </button>
+            </div>
+          </div>
+
+          <div class="mt-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <label class="relative block w-full md:max-w-sm">
+              <i data-lucide="search" class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"></i>
+              <input id="course-search-input" class="input-field pl-9" placeholder="Search courses by code or name..." type="search" autocomplete="off">
+            </label>
+            <div id="filter-pill-group" class="filter-row">
+              <button type="button" class="filter-pill" data-filter="all">All <span id="filter-all-count">0</span></button>
+              <button type="button" class="filter-pill active" data-filter="ready">Ready <span id="filter-ready-count">0</span></button>
+              <button type="button" class="filter-pill" data-filter="locked">Locked <span id="filter-locked-count">0</span></button>
+              <button type="button" class="filter-pill" data-filter="completed">Completed <span id="filter-completed-count">0</span></button>
+            </div>
+          </div>
+
+          <div id="course-loading" class="mt-6 space-y-4">
+            <div class="skeleton h-5 w-44"></div>
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div class="skeleton h-56 rounded-xl"></div>
+              <div class="skeleton h-56 rounded-xl"></div>
+            </div>
+          </div>
+
+          <div id="course-content" class="mt-6 hidden space-y-7">
+            <section class="course-group-section" data-group="ready">
+              <div class="section-heading">
+                <div class="section-heading-left">
+                  <span class="section-dot bg-cyan-400"></span>
+                  <h3>Ready to Enroll</h3>
+                  <span class="section-badge cyan">Unlocked</span>
+                </div>
+                <span id="ready-summary" class="text-[10px] font-semibold text-slate-500"></span>
+              </div>
+              <div id="ready-list" class="course-grid"></div>
+            </section>
+
+            <section class="course-group-section" data-group="locked">
+              <div class="section-heading">
+                <div class="section-heading-left">
+                  <span class="section-dot bg-amber-400"></span>
+                  <h3>Locked Courses</h3>
+                  <span class="section-badge amber">Missing prerequisites</span>
+                </div>
+                <span id="locked-summary" class="text-[10px] font-semibold text-slate-500"></span>
+              </div>
+              <div id="locked-list" class="course-grid"></div>
+            </section>
+
+            <section class="course-group-section" data-group="completed">
+              <div class="section-heading">
+                <div class="section-heading-left">
+                  <span class="section-dot bg-emerald-400"></span>
+                  <h3>Completed Foundation</h3>
+                  <span class="section-badge green">Passed</span>
+                </div>
+              </div>
+              <div id="completed-list" class="completed-grid"></div>
+            </section>
+
+            <div id="no-course-results" class="empty-state hidden">
+              <i data-lucide="search-x" class="mx-auto h-8 w-8 text-slate-500"></i>
+              <h3>No courses found</h3>
+              <p>Try another course code, name, or filter.</p>
+            </div>
+          </div>
+
+          <div id="course-error" class="mt-6 hidden error-state">
+            <i data-lucide="wifi-off" class="h-7 w-7"></i>
+            <div>
+              <h3>Unable to load course intelligence</h3>
+              <p id="course-error-text">Check that FastAPI and Neo4j are running.</p>
+            </div>
+            <button id="retry-btn" type="button" class="secondary-btn ml-auto">Retry</button>
+          </div>
+        </section>
+      </section>
+
+      <!-- Floating Copilot -->
+      <aside id="copilot" data-student-only class="copilot-float glass-panel hidden" aria-label="AI Academic Advisor">
+        <div class="flex items-center justify-between border-b border-white/10 bg-white/[0.02] p-4">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="ai-icon"><i data-lucide="sparkles" class="h-4 w-4"></i></div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5 text-sm font-bold">AI Academic Advisor <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span></div>
+              <div class="text-[10px] text-cyan-300">Local Ollama Academic Engine • Qwen 0.5B</div>
+            </div>
+          </div>
+          <button id="copilot-minimize-btn" type="button" class="icon-btn" title="Minimize Copilot" aria-label="Minimize Copilot"><i data-lucide="minus" class="h-4 w-4"></i></button>
+        </div>
+
+        <div class="border-b border-white/10 p-2.5">
+          <div class="ai-suggest-header">
+            <div>
+              <div class="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Suggested questions</div>
+              <div id="ai-suggest-current" class="mt-0.5 text-[9px] text-cyan-300">Eligibility &amp; prerequisites</div>
+            </div>
+            <select id="ai-question-category" class="ai-question-select" aria-label="Suggested question category">
+              <option value="eligibility">Eligibility &amp; prerequisites</option>
+              <option value="planning">Course planning</option>
+              <option value="comparison">Course comparison</option>
+              <option value="course_info">Course information</option>
+              <option value="progress">Progress &amp; completion</option>
+            </select>
+          </div>
+          <div id="ai-prompt-list" class="mt-2 grid gap-1.5">
+            <button type="button" class="ai-prompt-pill">Am I eligible for CS401?</button>
+            <button type="button" class="ai-prompt-pill">What prerequisites am I missing for CS402?</button>
+            <button type="button" class="ai-prompt-pill">Which courses am I currently eligible to take?</button>
+            <button type="button" class="ai-prompt-pill">Why is CS403 locked?</button>
+          </div>
+        </div>
+
+        <div id="chat-messages-container" class="chat-scroll flex-1 space-y-4 overflow-y-auto p-4" aria-live="polite">
+          <div id="chat-empty" class="flex h-full min-h-[250px] flex-col items-center justify-center text-center">
+            <div class="ai-icon mb-3"><i data-lucide="bot" class="h-5 w-5"></i></div>
+            <h3 class="font-display text-sm font-bold">Ask your Academic Copilot</h3>
+            <p class="mt-1 max-w-xs text-xs leading-5 text-slate-500">Get personalized guidance about eligibility, prerequisites, and your academic path.</p>
+          </div>
+        </div>
+
+        <div id="ai-typing-indicator" class="hidden px-4 pb-2">
+          <div class="flex items-center gap-2 text-xs text-slate-400">
+            <div class="message-avatar bot"><i data-lucide="bot" class="h-3.5 w-3.5"></i></div>
+            <span>Copilot is thinking</span>
+            <span class="typing-dots"><i></i><i></i><i></i></span>
+          </div>
+        </div>
+
+        <form id="copilot-chat-form" class="border-t border-white/10 bg-black/20 p-3">
+          <div class="relative">
+            <textarea id="copilot-input" rows="2" class="chat-input pr-14" placeholder="Ask about courses, prerequisites, eligibility, or your academic plan..."></textarea>
+            <button id="copilot-send-btn" type="submit" class="send-btn" title="Send message"><i data-lucide="send" class="h-4 w-4"></i></button>
+          </div>
+          <div class="mt-1 flex justify-between px-1 text-[9px] text-slate-600"><span>Press Enter ↵ to send</span><span>Shift + Enter for newline</span></div>
+        </form>
+      </aside>
+    </div>
+  </main>
+
+  <div id="copilot-launcher" data-student-only class="copilot-launcher-wrap">
+    <button id="copilot-launcher-btn" type="button" class="copilot-launcher"><i data-lucide="sparkles" class="h-4 w-4"></i><span>Ask AI Advisor</span></button>
+  </div>
+
+  <footer class="relative z-10 border-t border-white/10 bg-black/20">
+    <div class="mx-auto flex max-w-[1440px] flex-col gap-2 px-4 py-3 text-[10px] text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+      <span>Academic Pathway Copilot © 2026 • Graph-aware academic planning</span>
+      <div class="flex flex-wrap gap-3">
+        <span><i class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400"></i> FastAPI: <b id="footer-fastapi">Checking</b></span>
+        <span><i class="inline-block h-1.5 w-1.5 rounded-full bg-slate-500"></i> MySQL: <b id="footer-mysql">Backend-managed</b></span>
+        <span><i class="inline-block h-1.5 w-1.5 rounded-full bg-cyan-400"></i> Neo4j: <b id="footer-neo4j">Graph API</b></span>
+        <span><i class="inline-block h-1.5 w-1.5 rounded-full bg-violet-400"></i> Ollama: <b id="footer-ollama">Backend-managed</b></span>
+      </div>
+    </div>
+  </footer>
+
+
+  <!-- Student details modal -->
+  <div id="student-details-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="details-name">
+    <div id="student-modal-backdrop" class="modal-backdrop"></div>
+    <div class="modal-card student-modal-card">
+      <div class="flex items-start justify-between gap-4 border-b border-white/10 p-5">
+        <div>
+          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">Current Student</div>
+          <h2 id="details-name" class="mt-1 font-display text-lg font-bold">Student</h2>
+          <p class="mt-1 text-xs text-slate-500">Persistent profile and academic state.</p>
+        </div>
+        <button id="student-details-close-btn" type="button" class="icon-btn"><i data-lucide="x" class="h-4 w-4"></i></button>
+      </div>
+      <div class="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2">
+        <div class="detail-field"><span>Student ID</span><strong id="details-id">—</strong></div>
+        <div class="detail-field"><span>Role</span><strong id="details-role">—</strong></div>
+        <div class="detail-field"><span>Email</span><strong id="details-email">—</strong></div>
+        <div class="detail-field"><span>Department</span><strong id="details-department">—</strong></div>
+        <div class="detail-field"><span>Track</span><strong id="details-track">—</strong></div>
+        <div class="detail-field"><span>Semester</span><strong id="details-semester">—</strong></div>
+        <div class="detail-field sm:col-span-2"><span>Curriculum</span><strong id="details-subjects">AI &amp; Data Science curriculum (semester-based)</strong></div>
+        <div class="detail-field sm:col-span-2"><span>Completed Foundation</span><strong id="details-completed">—</strong></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add student modal -->
+  <div id="add-student-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="add-student-title">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card student-modal-card">
+      <div class="flex items-start justify-between gap-4 border-b border-white/10 p-5">
+        <div>
+          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-violet-300">Student Management</div>
+          <h2 id="add-student-title" class="mt-1 font-display text-lg font-bold">Add New Student</h2>
+          <p class="mt-1 text-xs text-slate-500">Create a persistent profile. Track is automatically set to AI &amp; Data Science.</p>
+        </div>
+        <button id="close-student-modal-btn" type="button" class="icon-btn"><i data-lucide="x" class="h-4 w-4"></i></button>
+      </div>
+      <form id="add-student-form" class="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2">
+        <label class="form-label">Full Name<input id="student-name-input" class="input-field" required maxlength="100" placeholder="e.g. Aisha Khan"></label>
+        <label class="form-label">Email<input id="student-email-input" class="input-field" type="email" placeholder="student@example.com"></label>
+        <label class="form-label">Department<input id="student-department-input" class="input-field" required maxlength="120" placeholder="Computer Science"></label>
+        <label class="form-label">Track<input id="student-track-input" class="input-field opacity-70" value="AI & Data Science" readonly></label>
+        <label class="form-label">Semester<input id="student-semester-input" class="input-field" type="number" min="1" max="8" value="1" required></label>
+        <div class="sm:col-span-2 rounded-lg border border-cyan-400/10 bg-cyan-400/[0.03] p-3 text-[10px] leading-5 text-slate-500">Track is fixed to AI &amp; Data Science. Semester is used to guide the curriculum view and Copilot recommendations. No subjects need to be entered here.</div>
+        <div class="sm:col-span-2 flex justify-end gap-2 border-t border-white/10 pt-3">
+          <button type="button" class="secondary-btn" onclick="document.getElementById('add-student-modal').classList.add('hidden')">Cancel</button>
+          <button id="create-student-btn" type="submit" class="primary-btn"><i data-lucide="user-plus" class="h-3.5 w-3.5"></i> Create Student</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Advisor decision modal -->
+  <div id="advisor-decision-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="advisor-decision-title">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card advisor-modal-card">
+      <div class="flex items-start justify-between gap-4 border-b border-white/10 p-5">
+        <div>
+          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-violet-300">Human approval gate</div>
+          <h2 id="advisor-decision-title" class="mt-1 font-display text-lg font-bold">Review request</h2>
+          <p id="advisor-decision-subtitle" class="mt-1 text-xs text-slate-500">Advisor decision</p>
+        </div>
+        <button id="advisor-decision-close" type="button" class="icon-btn"><i data-lucide="x" class="h-4 w-4"></i></button>
+      </div>
+      <div class="p-5">
+        <div id="advisor-decision-details" class="approval-detail-grid"></div>
+        <label class="form-label mt-4">Decision note
+          <textarea id="advisor-note-input" class="chat-input" rows="4" placeholder="Add a reason or guidance for the student..."></textarea>
+        </label>
+      </div>
+      <div class="flex flex-col-reverse gap-2 border-t border-white/10 p-4 sm:flex-row sm:justify-end">
+        <button id="advisor-changes-btn" type="button" class="secondary-btn"><i data-lucide="message-square-warning" class="h-3.5 w-3.5"></i> Request Changes</button>
+        <button id="advisor-reject-btn" type="button" class="danger-btn"><i data-lucide="x-circle" class="h-3.5 w-3.5"></i> Reject</button>
+        <button id="advisor-approve-btn" type="button" class="primary-btn"><i data-lucide="check-circle" class="h-3.5 w-3.5"></i> Approve</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- What-If Simulation Modal -->
+  <div id="what-if-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="what-if-title">
+    <div id="what-if-backdrop" class="modal-backdrop"></div>
+    <div class="modal-card what-if-modal-card">
+      <div class="flex items-start justify-between gap-4 border-b border-white/10 p-5">
+        <div>
+          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-violet-300">Pathway Simulation</div>
+          <h2 id="what-if-title" class="mt-1 font-display text-lg font-bold">What-If Simulator</h2>
+          <p class="mt-1 text-xs leading-5 text-slate-500">Test a hypothetical course decision without changing the student's real academic record.</p>
+        </div>
+        <button id="what-if-close-btn" type="button" class="icon-btn"><i data-lucide="x" class="h-4 w-4"></i></button>
+      </div>
+
+      <div class="p-5">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label class="form-label">Scenario
+            <select id="what-if-action" class="input-field">
+              <option value="take">What if I take / complete a course?</option>
+              <option value="skip">What if I skip / remove a completed course?</option>
+            </select>
+          </label>
+          <label class="form-label">Course
+            <select id="what-if-course" class="input-field">
+              <option value="">Select a course...</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="mt-4 rounded-xl border border-cyan-400/10 bg-cyan-400/[0.03] p-3 text-[10px] leading-5 text-slate-400">
+          <div class="flex items-start gap-2"><i data-lucide="shield-check" class="mt-0.5 h-4 w-4 shrink-0 text-cyan-300"></i><span><strong class="text-slate-300">Safe simulation:</strong> this only calculates a hypothetical state. It never enrolls, removes, or changes any MySQL record.</span></div>
+        </div>
+
+        <div id="what-if-loading" class="hidden py-8 text-center"><div class="spinner mx-auto"></div><p class="mt-3 text-xs text-slate-500">Calculating pathway impact...</p></div>
+        <div id="what-if-error" class="hidden mt-4 error-state"><i data-lucide="triangle-alert" class="h-6 w-6"></i><div><h3>Simulation unavailable</h3><p id="what-if-error-text">Unable to run the scenario.</p></div></div>
+        <div id="what-if-result" class="hidden mt-5"></div>
+      </div>
+
+      <div class="flex flex-col-reverse gap-2 border-t border-white/10 p-4 sm:flex-row sm:justify-between">
+        <button id="what-if-close-confirm-btn" type="button" class="secondary-btn">Close</button>
+        <button id="what-if-run-btn" type="button" class="primary-btn"><i data-lucide="play" class="h-4 w-4"></i> Run Simulation</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Course / Graph Modal -->
+  <div id="prerequisite-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-course-title">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="flex items-start justify-between gap-4 border-b border-white/10 p-5">
+        <div>
+          <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">Prerequisite Knowledge Graph</div>
+          <h2 id="modal-course-title" class="mt-1 font-display text-lg font-bold">Course</h2>
+          <p id="modal-course-subtitle" class="mt-1 text-xs text-slate-500">Live prerequisite data from Neo4j.</p>
+        </div>
+        <button id="close-modal-btn" type="button" class="icon-btn"><i data-lucide="x" class="h-4 w-4"></i></button>
+      </div>
+
+      <div class="p-5">
+        <div id="graph-loading" class="hidden py-10 text-center">
+          <div class="spinner mx-auto"></div>
+          <p class="mt-3 text-xs text-slate-500">Loading prerequisite graph...</p>
+        </div>
+
+        <div id="graph-error" class="hidden error-state">
+          <i data-lucide="triangle-alert" class="h-6 w-6"></i>
+          <div><h3>Graph unavailable</h3><p id="graph-error-text">Unable to retrieve prerequisites.</p></div>
+        </div>
+
+        <div id="graph-content" class="hidden">
+          <div class="mb-4 flex flex-wrap gap-2">
+            <span class="legend-pill"><span class="legend-dot bg-emerald-400"></span>Completed</span>
+            <span class="legend-pill"><span class="legend-dot bg-cyan-400"></span>Target course</span>
+            <span class="legend-pill"><span class="legend-dot bg-rose-400"></span>Missing</span>
+          </div>
+          <div id="graph-canvas" class="graph-canvas"></div>
+          <div id="graph-list" class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2"></div>
+        </div>
+      </div>
+
+      <div class="flex flex-col-reverse gap-2 border-t border-white/10 p-4 sm:flex-row sm:justify-end">
+        <button id="modal-close-confirm-btn" type="button" class="secondary-btn">Close</button>
+        <button id="modal-ask-copilot-btn" type="button" class="primary-btn"><i data-lucide="sparkles" class="h-4 w-4"></i> Ask Copilot</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./js/app.js"></script>
+  <script src="./js/graph.js"></script>
+  <script src="./js/copilot.js"></script>
+</body>
+</html>

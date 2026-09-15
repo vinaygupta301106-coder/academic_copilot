@@ -1,0 +1,61 @@
+ACADEMIC COPILOT — LOCAL OLLAMA UPDATE
+
+This version uses ONLY local Ollama with qwen2.5:0.5b.
+OpenAI API code and dependency have been removed.
+
+15-QUESTION LIMIT
+- Maximum 15 natural-language Ollama questions per student per calendar day.
+- Usage is stored in MySQL table: copilot_ai_usage.
+- Deterministic academic-rule answers (eligibility, missing prerequisites, completed courses,
+  progress, and next-semester options when data is available) do NOT consume the limit.
+- If an Ollama request fails after a slot is reserved, the slot is returned.
+
+DATA ACCURACY
+- The backend reads the selected student's real profile/completed courses from MySQL.
+- Course names, codes, credits, semesters, and prerequisites come from Neo4j.
+- Frontend completed_courses is NOT trusted for Copilot identity/state.
+- Invalid legacy free-text subjects are ignored unless they match a real Neo4j course code.
+- Ollama is instructed to use only verified context and never invent curriculum facts.
+
+STUDENT CREATION
+- Full Name
+- Email
+- Department
+- Semester (1–8)
+- Track is automatically fixed to AI & Data Science.
+- No subjects are requested.
+
+OLLAMA STARTUP FOR THIS LAPTOP
+Your machine previously crashed when Ollama used the automatic GPU backend.
+For the current demonstration, start Ollama in a temporary CPU session:
+
+CMD 1:
+  taskkill /F /IM ollama.exe
+  taskkill /F /IM "ollama app.exe"
+  set OLLAMA_LLM_LIBRARY=cpu
+  ollama serve
+
+Keep CMD 1 open while demonstrating.
+
+CMD 2:
+  set OLLAMA_LLM_LIBRARY=cpu
+  ollama run qwen2.5:0.5b
+
+The CPU environment variable is temporary for that CMD window; it is NOT a permanent Windows setting.
+
+BACKEND:
+  cd C:\Users\KANHAI\Desktop\academic_copilot_updated\backend
+  py -m uvicorn app.main:app --reload --port 8000
+
+FRONTEND:
+  cd C:\Users\KANHAI\Desktop\academic_copilot_updated\frontend
+  py -m http.server 5500
+
+Open:
+  http://127.0.0.1:5500
+
+IMPORTANT .ENV
+The replacement package intentionally does not include backend/.env so your database
+passwords and Neo4j credentials are not redistributed. Keep your existing backend/.env.
+Its Neo4j URI should remain the working neo4j+ssc URI.
+OpenAI settings are no longer used by this version.
