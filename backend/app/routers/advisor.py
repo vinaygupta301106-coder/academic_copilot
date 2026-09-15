@@ -158,9 +158,47 @@ def decide_request(request_id: int, payload: DecisionRequest, x_demo_role: str |
         if not row: raise HTTPException(status_code=404, detail="Advisor request not found.")
         if row["status"] != "Pending" and new_status != "Changes Requested":
             raise HTTPException(status_code=409, detail=f"Request is already {row['status']}.")
+        code = str(row["course_code"]).strip().upper()
+        if new_status == "Approved":
+            # Revalidate the authoritative prerequisite state at approval time.
+            completed = {str(c).upper() for c in conn.execute(text("""
+                SELECT course_code FROM copilot_student_courses WHERE student_id=:sid AND status='completed'
+            """), {"sid": row["student_id"]}).scalars().all()}
+            enrolled = {str(c).upper() for c in conn.execute(text("""
+                SELECT course_code FROM copilot_student_courses WHERE student_id=:sid AND status='enrolled'
+            """), {"sid": row["student_id"]}).scalars().all()}
+            if code in completed:
+                raise HTTPException(status_code=409, detail=f"{code} is already completed for this student.")
+            if code in enrolled:
+                raise HTTPException(status_code=409, detail=f"{code} is already enrolled for this student.")
+            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD))
+            try:
+                with driver.session() as session:
+                    course = session.run("""
+                        MATCH (c:Course {code:$code})
+                        OPTIONAL MATCH (p:Course)-[:PREREQUISITE_FOR]->(c)
+                        RETURN c.code AS code, collect(DISTINCT p.code) AS prerequisites
+                    """, code=code).single()
+                    if not course:
+                        raise HTTPException(status_code=404, detail=f"Course '{code}' not found in the curriculum knowledge graph.")
+                    prerequisites = [str(p).upper() for p in (course["prerequisites"] or []) if p]
+            finally:
+                driver.close()
+            missing = [p for p in prerequisites if p not in completed]
+            if missing:
+                raise HTTPException(status_code=409, detail=f"{code} can no longer be approved. Missing prerequisite(s): {', '.join(missing)}")
+            conn.execute(text("""
+                INSERT INTO copilot_student_courses (student_id, course_code, status)
+                VALUES (:sid, :code, 'enrolled')
+                ON DUPLICATE KEY UPDATE status='enrolled', enrolled_at=CURRENT_TIMESTAMP
+            """), {"sid": row["student_id"], "code": code})
+
         conn.execute(text("""UPDATE copilot_advisor_requests SET status=:status, advisor_note=:note, reviewed_by=:name, reviewed_role=:role WHERE id=:id"""), {"status":new_status,"note":payload.note.strip() or None,"name":payload.actor_name.strip() or "Demo Advisor","role":role,"id":request_id})
         details=json.dumps({"previous_status":row["status"],"new_status":new_status,"note":payload.note.strip()})
-        _log(conn,row["student_id"],role,payload.actor_name.strip() or "Demo Advisor",f"Advisor decision: {new_status}","advisor_request",request_id,row["course_code"],details)
+        _log(conn,row["student_id"],role,payload.actor_name.strip() or "Demo Advisor",f"Advisor decision: {new_status}","advisor_request",request_id,code,details)
+        if new_status == "Approved":
+            _log(conn,row["student_id"],role,payload.actor_name.strip() or "Demo Advisor","Enrollment created after approval","student_course",None,code,
+                 json.dumps({"source_request_id": request_id, "status": "enrolled"}))
         updated=conn.execute(text("SELECT * FROM copilot_advisor_requests WHERE id=:id"), {"id":request_id}).mappings().first()
     return {"status":"SUCCESS","request":_serialize(updated),"message":f"Request #{request_id} marked {new_status}."}
 

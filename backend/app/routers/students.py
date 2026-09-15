@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 from neo4j import GraphDatabase
 
 from app.config import MYSQL_DATABASE_URL, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD
-from app.security import require_student_scope, require_session
+from app.security import require_student_scope, require_session, require_role_header
 
 router = APIRouter(prefix="/api/v1/students", tags=["Students & Audit"])
 mysql_engine = create_engine(MYSQL_DATABASE_URL, pool_pre_ping=True)
@@ -29,6 +29,12 @@ class StudentCreate(BaseModel):
 class EnrollRequest(BaseModel):
     user_id: int
     course_code: str
+
+
+class CourseRecordAdjustment(BaseModel):
+    course_code: str = Field(min_length=1, max_length=30)
+    action: str = Field(default="remove", max_length=30)
+    reason: str = Field(min_length=3, max_length=500)
 
 
 def init_student_storage():
@@ -87,6 +93,30 @@ def _student_row(student_id: int):
             WHERE id = :id
         """), {"id": student_id}).mappings().first()
     return dict(row) if row else None
+
+
+def _enrolled_courses(student_id: int) -> list[str]:
+    with mysql_engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT course_code
+            FROM copilot_student_courses
+            WHERE student_id = :id AND status = 'enrolled'
+            ORDER BY enrolled_at, course_code
+        """), {"id": student_id}).scalars().all()
+    return [str(code) for code in rows]
+
+
+def _write_audit(student_id: int, actor_role: str, actor_name: str, action: str, course_code: str | None, details: str):
+    # Audit table is initialized by the advisor router at application startup.
+    with mysql_engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO copilot_audit_log
+            (student_id, actor_role, actor_name, action, entity_type, entity_id, course_code, details)
+            VALUES (:student_id, :actor_role, :actor_name, :action, :entity_type, NULL, :course_code, :details)
+        """), {
+            "student_id": student_id, "actor_role": actor_role, "actor_name": actor_name,
+            "action": action, "entity_type": "student_course", "course_code": course_code, "details": details
+        })
 
 
 def _completed_courses(student_id: int) -> list[str]:
@@ -163,6 +193,7 @@ def get_student(user_id: int, x_demo_role: str | None = Header(default=None), x_
         raise HTTPException(status_code=404, detail="Student not found.")
     student = _public_student(row)
     student["completed_courses"] = _completed_courses(user_id)
+    student["enrolled_courses"] = _enrolled_courses(user_id)
     return student
 
 
@@ -180,6 +211,7 @@ def audit_student_progress(user_id: int, x_demo_role: str | None = Header(defaul
         raise HTTPException(status_code=404, detail="Student not found.")
 
     completed_courses = _completed_courses(user_id)
+    enrolled_courses = _enrolled_courses(user_id)
     driver = get_neo4j_driver()
     try:
         with driver.session() as session:
@@ -193,11 +225,13 @@ def audit_student_progress(user_id: int, x_demo_role: str | None = Header(defaul
             catalog = [record.data() for record in catalog_result]
             valid_codes = {str(item["code"]).upper() for item in catalog if item["code"]}
             completed_valid = [code for code in completed_courses if code.upper() in valid_codes]
+            enrolled_valid = [code for code in enrolled_courses if code.upper() in valid_codes]
+            occupied = {c.upper() for c in completed_valid + enrolled_valid}
 
             eligible = []
             for item in catalog:
                 code = str(item["code"]).upper()
-                if code in {c.upper() for c in completed_valid}:
+                if code in occupied:
                     continue
                 required = [str(p).upper() for p in (item["required_prereqs"] or []) if p]
                 if all(req in {c.upper() for c in completed_valid} for req in required):
@@ -212,6 +246,7 @@ def audit_student_progress(user_id: int, x_demo_role: str | None = Header(defaul
                 "user_id": user_id,
                 "student": _public_student(row),
                 "completed_courses": completed_valid,
+                "enrolled_courses": enrolled_valid,
                 "eligible_courses": eligible,
             }
     finally:
@@ -220,28 +255,22 @@ def audit_student_progress(user_id: int, x_demo_role: str | None = Header(defaul
 
 @router.post("/enroll")
 def enroll_course(payload: EnrollRequest, x_demo_role: str | None = Header(default=None), x_demo_student_id: str | None = Header(default=None), authorization: str | None = Header(default=None)):
-    try: require_session(authorization, x_demo_role, x_demo_student_id)
-    except PermissionError as exc: raise HTTPException(status_code=403, detail=str(exc))
-    """Persist a course enrollment as completed for this simulation and unlock dependents immediately."""
+    """Approval-gated enrollment entry point. The existing UI button creates a request; it never enrolls directly."""
+    try:
+        require_session(authorization, x_demo_role, x_demo_student_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     try:
         role = require_student_scope(x_demo_role, x_demo_student_id, payload.user_id)
         if role != "Student":
-            raise PermissionError("Only the Student role can enroll courses in this demo workflow.")
+            raise PermissionError("Only the Student role can request course enrollment in this workflow.")
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
+
     row = _student_row(payload.user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Student not found.")
-
     code = payload.course_code.strip().upper()
-    completed = _completed_courses(payload.user_id)
-    if code in completed:
-        return {
-            "status": "SUCCESS",
-            "message": f"{code} is already recorded for Student #{payload.user_id}.",
-            "course_code": code,
-            "completed_courses": completed,
-        }
 
     driver = get_neo4j_driver()
     try:
@@ -249,32 +278,83 @@ def enroll_course(payload: EnrollRequest, x_demo_role: str | None = Header(defau
             course_result = session.run("""
                 MATCH (c:Course {code: $code})
                 OPTIONAL MATCH (prereq:Course)-[:PREREQUISITE_FOR]->(c)
-                RETURN c.code AS code, collect(DISTINCT prereq.code) AS prerequisites
+                RETURN c.code AS code, c.name AS name, collect(DISTINCT prereq.code) AS prerequisites
             """, code=code).single()
             if not course_result:
                 raise HTTPException(status_code=404, detail=f"Course '{code}' not found.")
-            prerequisites = course_result["prerequisites"] or []
+            prerequisites = [str(p).upper() for p in (course_result["prerequisites"] or []) if p]
     finally:
         driver.close()
 
+    completed = {c.upper() for c in _completed_courses(payload.user_id)}
+    enrolled = {c.upper() for c in _enrolled_courses(payload.user_id)}
+    if code in completed:
+        return {"status": "COMPLETED", "message": f"{code} is already completed.", "course_code": code}
+    if code in enrolled:
+        return {"status": "ENROLLED", "message": f"{code} is already enrolled.", "course_code": code}
     missing = [p for p in prerequisites if p not in completed]
     if missing:
-        raise HTTPException(
-            status_code=409,
-            detail=f"{code} is locked. Missing prerequisite(s): {', '.join(missing)}"
-        )
+        raise HTTPException(status_code=409, detail=f"{code} is locked. Missing prerequisite(s): {', '.join(missing)}")
 
     with mysql_engine.begin() as conn:
+        existing = conn.execute(text("""
+            SELECT id, status FROM copilot_advisor_requests
+            WHERE student_id=:sid AND course_code=:code AND status IN ('Pending','Approved')
+            ORDER BY id DESC LIMIT 1
+        """), {"sid": payload.user_id, "code": code}).mappings().first()
+        if existing:
+            return {"status": "PENDING" if existing["status"] == "Pending" else "APPROVED", "request_id": existing["id"], "course_code": code,
+                    "message": f"{code} already has an {existing['status'].lower()} advisor request."}
+        result = conn.execute(text("""
+            INSERT INTO copilot_advisor_requests (student_id, course_code, reason)
+            VALUES (:sid, :code, :reason)
+        """), {"sid": payload.user_id, "code": code,
+              "reason": f"Enrollment approval requested for {code} from the course enrollment action."})
+        request_id = result.lastrowid
         conn.execute(text("""
-            INSERT INTO copilot_student_courses (student_id, course_code, status)
-            VALUES (:student_id, :course_code, 'completed')
-            ON DUPLICATE KEY UPDATE status = 'completed', enrolled_at = CURRENT_TIMESTAMP
-        """), {"student_id": payload.user_id, "course_code": code})
+            INSERT INTO copilot_audit_log
+            (student_id, actor_role, actor_name, action, entity_type, entity_id, course_code, details)
+            VALUES (:sid, 'Student', :name, 'Approval requested', 'advisor_request', :rid, :code, :details)
+        """), {"sid": payload.user_id, "name": row["name"], "rid": str(request_id), "code": code,
+              "details": "Enrollment requested through the course Enroll button; advisor approval required before enrollment."})
 
-    new_completed = _completed_courses(payload.user_id)
-    return {
-        "status": "SUCCESS",
-        "message": f"Successfully registered Student #{payload.user_id} for {code}.",
-        "course_code": code,
-        "completed_courses": new_completed,
-    }
+    return {"status": "PENDING", "request_id": request_id, "course_code": code,
+            "message": f"Advisor approval requested for {code}. The course will be enrolled only after approval."}
+
+
+@router.post("/{user_id}/course-records/adjust")
+def adjust_course_record(user_id: int, payload: CourseRecordAdjustment,
+                         x_demo_role: str | None = Header(default=None),
+                         authorization: str | None = Header(default=None)):
+    """Advisor/Coordinator can remove an enrolled or completed record with an auditable reason."""
+    try:
+        require_session(authorization, x_demo_role)
+        role = require_role_header(x_demo_role, {"Advisor", "Coordinator"})
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    if payload.action.strip().lower() != "remove":
+        raise HTTPException(status_code=422, detail="Only the 'remove' record adjustment is supported in this demo.")
+    code = payload.course_code.strip().upper()
+    with mysql_engine.begin() as conn:
+        student = conn.execute(text("SELECT id, name FROM copilot_students WHERE id=:id"), {"id": user_id}).mappings().first()
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found.")
+        row = conn.execute(text("""
+            SELECT id, status FROM copilot_student_courses
+            WHERE student_id=:sid AND course_code=:code
+            FOR UPDATE
+        """), {"sid": user_id, "code": code}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"No academic record exists for {code}.")
+        old_status = str(row["status"])
+        conn.execute(text("DELETE FROM copilot_student_courses WHERE id=:id"), {"id": row["id"]})
+        details = json.dumps({"student": student["name"], "course_code": code, "previous_status": old_status,
+                              "action": "remove", "reason": payload.reason.strip()})
+        conn.execute(text("""
+            INSERT INTO copilot_audit_log
+            (student_id, actor_role, actor_name, action, entity_type, entity_id, course_code, details)
+            VALUES (:sid, :role, :actor, :action, 'student_course', :entity_id, :code, :details)
+        """), {"sid": user_id, "role": role, "actor": "Demo Coordinator" if role == "Coordinator" else "Demo Advisor",
+              "action": f"Academic record removed ({old_status})", "entity_id": str(row["id"]), "code": code, "details": details})
+    return {"status": "SUCCESS", "course_code": code, "previous_status": old_status,
+            "message": f"{code} was removed from {student['name']}'s academic record and the action was audited."}

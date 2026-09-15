@@ -9,3 +9,12 @@ No benchmark numbers are invented. Timing, correctness, and outcome measurements
 
 ## Scope
 Phase 7 focuses on evaluation evidence rather than adding new product features. Existing What-If, recommendation, advisor workflow, audit, RBAC, security, provenance, and CI/CD capabilities remain unchanged.
+
+
+## Enrollment Governance Update
+- Existing Student `Enroll` buttons are approval-gated; they create a pending advisor request instead of directly writing an enrollment record.
+- Advisor/Coordinator approval revalidates prerequisites and creates an `enrolled` course record only after approval.
+- Student audit now distinguishes `completed` from `enrolled`. Enrolled courses do not count as completed prerequisites.
+- Advisor/Coordinator Student Academic Overview now exposes enrolled records with Remove and completed records with Adjust/remove controls.
+- Academic record changes require a reason and are written to the audit trail.
+- Added enrollment-governance regression tests.

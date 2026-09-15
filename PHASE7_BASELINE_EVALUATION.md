@@ -76,3 +76,7 @@ Record actual results during the final demonstration instead of inventing values
 
 ## Expected evaluation claim
 The capstone should claim improvement only where the collected evidence supports it. A safe conclusion is that Academic Copilot centralizes prerequisite checking, pathway simulation, recommendations, governed approval, provenance, and auditability in one workflow. Quantitative time/accuracy improvements should be reported only after measurement.
+
+
+### Finalized Enrollment Governance Behavior
+The final evaluation build uses an approval-first enrollment workflow. The existing `Enroll` action creates an advisor/coordinator approval request; no student enrollment is persisted until an authorized Advisor or Coordinator approves the request. Approved requests create an `enrolled` record and an audit event. Staff can remove enrolled or completed records from Student Academic Overview with a required reason, and those changes are audited.
