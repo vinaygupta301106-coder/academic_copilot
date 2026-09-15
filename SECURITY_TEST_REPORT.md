@@ -38,3 +38,7 @@ Do not mark a manual test as PASS until it has been executed against the running
 ## Known limitation
 
 The prototype uses signed demo sessions rather than production authentication. This is documented as a capstone prototype limitation and should not be described as production identity/security.
+
+
+## Phase 6 provenance tests
+The suite now includes 2 provenance tests covering authoritative backend evidence IDs and explicit non-authoritative LLM labeling. The combined suite contains 23 automated tests.

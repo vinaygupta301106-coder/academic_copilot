@@ -47,6 +47,52 @@ class WhatIfRequest(BaseModel):
     course_codes: list[str] = []
 
 
+def _source_provenance(student_id: int, *, ai_used: bool = False, course_codes: list[str] | None = None):
+    """Return traceable evidence for academic facts used by the Copilot."""
+    codes = sorted({str(c).upper() for c in (course_codes or []) if c})
+    sources = [
+        {
+            "id": "KG-COURSE-CATALOG",
+            "type": "Neo4j",
+            "name": "Curriculum knowledge graph",
+            "scope": "Course catalog facts: code, title, credits, semester and curriculum membership.",
+            "authority": "authoritative",
+            "records": codes,
+        },
+        {
+            "id": "KG-PREREQUISITES",
+            "type": "Neo4j",
+            "name": "Prerequisite relationships",
+            "scope": "Verified prerequisite relationships used for eligibility and pathway decisions.",
+            "authority": "authoritative",
+            "records": codes,
+        },
+        {
+            "id": "MYSQL-STUDENT-RECORD",
+            "type": "MySQL",
+            "name": "Student academic record",
+            "scope": "Student profile and recorded course-completion status for the scoped student.",
+            "authority": "authoritative",
+            "records": [f"student:{student_id}"],
+        },
+    ]
+    if ai_used:
+        sources.append({
+            "id": "LLM-SYNTHESIS",
+            "type": "Ollama",
+            "name": "Qwen 0.5B",
+            "scope": "Natural-language synthesis only; not an authority for university policy or academic facts.",
+            "authority": "non-authoritative",
+            "records": [],
+        })
+    return {
+        "method": "Verified backend evidence first; language model synthesis second when needed.",
+        "sources": sources,
+        "course_codes": codes,
+        "student_scope": f"student:{student_id}",
+    }
+
+
 def _course_snapshot(course, catalog, completed_set):
     by_code = {c["code"]: c for c in catalog}
     missing = [p for p in course["prereqs"] if p in by_code and p not in completed_set]
@@ -774,7 +820,10 @@ def get_recommendations(user_id: int, x_demo_role: str | None = Header(default=N
         if not catalog:
             raise HTTPException(status_code=503, detail="No curriculum courses were found in Neo4j.")
         completed = _completed(user_id)
-        return _recommendation_engine(catalog, student, completed)
+        result = _recommendation_engine(catalog, student, completed)
+        recommended_codes = [r.get("code") for r in result.get("recommendations", []) if isinstance(r, dict) and r.get("code")]
+        result["provenance"] = _source_provenance(user_id, course_codes=recommended_codes)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -801,6 +850,7 @@ def run_what_if(payload: WhatIfRequest, x_demo_role: str | None = Header(default
         result["student_name"] = student["name"]
         result["track"] = student["track"]
         result["semester"] = student["semester"]
+        result["provenance"] = _source_provenance(payload.user_id, course_codes=[c.get("code") for c in result.get("requested_courses", []) if isinstance(c, dict)])
         return result
     except HTTPException:
         raise
@@ -846,6 +896,7 @@ def chat_with_copilot(payload: ChatRequest, x_demo_role: str | None = Header(def
                     {"source": "Neo4j curriculum knowledge graph", "scope": "Course catalog and prerequisite relationships"},
                     {"source": "MySQL student record", "scope": "Student profile and recorded completion status"},
                 ],
+                "provenance": _source_provenance(payload.user_id, course_codes=[c["code"] for c in _find_courses(payload.user_message, catalog)]),
             }
 
         allowed, usage_count = _reserve_ai_question(payload.user_id)
@@ -958,6 +1009,7 @@ of guessing.
                 {"source": "MySQL student record", "scope": "Verified student profile and completion records"},
                 {"source": "Ollama (Qwen 0.5B)", "scope": "Natural-language synthesis only; not an authority for university policy"},
             ],
+            "provenance": _source_provenance(payload.user_id, ai_used=True, course_codes=[c["code"] for c in mentioned_courses]),
         }
     except HTTPException:
         raise

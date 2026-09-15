@@ -170,12 +170,14 @@
   }
 
 
-  function renderSources(sources) {
+  function renderSources(sources, provenance = null) {
     const container = document.getElementById("chat-messages-container");
     if (!container || !Array.isArray(sources) || !sources.length) return;
     const box = document.createElement("div");
     box.className = "ai-source-note";
-    box.innerHTML = `<strong>Verified sources</strong><ul>${sources.map(s => `<li>${App.escapeHtml(String(s.source || "Source"))} — ${App.escapeHtml(String(s.scope || ""))}</li>`).join("")}</ul>`;
+    const rows = sources.map(s => `<li><strong>${App.escapeHtml(String(s.source || s.name || "Source"))}</strong> — ${App.escapeHtml(String(s.scope || ""))}</li>`).join("");
+    const ids = Array.isArray(provenance?.sources) ? provenance.sources.map(s => s.id).filter(Boolean).join(" • ") : "";
+    box.innerHTML = `<strong>Verified sources &amp; provenance</strong><ul>${rows}</ul>${ids ? `<div class="mt-2 text-[9px] uppercase tracking-[0.12em] text-slate-500">Evidence IDs: ${App.escapeHtml(ids)}</div>` : ""}`;
     container.appendChild(box);
     container.scrollTop = container.scrollHeight;
   }
