@@ -1,6 +1,6 @@
 /* Academic Pathway Copilot — dashboard controller */
 (() => {
-  const API_BASE = "http://127.0.0.1:8000/api/v1";
+  const API_BASE = "https://academic-copilot-cb4l.onrender.com/api/v1";
 
   function demoRoleHeaders() {
     const h = {
@@ -4143,7 +4143,7 @@
         "Failed to fetch"
       )
     ) {
-      return "FastAPI is unreachable. Start the backend at http://127.0.0.1:8000 and retry.";
+      return ""FastAPI is unreachable. Please check your internet connection and try again.";
     }
 
     return msg;

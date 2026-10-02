@@ -258,7 +258,7 @@
   function friendlyError(err) {
     const message = err?.message || "Unknown error.";
     if (message.includes("Failed to fetch")) {
-      return "The frontend cannot reach the FastAPI server at http://127.0.0.1:8000.";
+      return "The frontend cannot reach the FastAPI server. Please check your internet connection and try again.";
     }
     if (message.includes("Daily AI question limit reached")) {
       return message;
