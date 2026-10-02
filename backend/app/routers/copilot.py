@@ -651,7 +651,15 @@ def _asks_general_scope(question: str) -> bool:
 def answer_with_ollama(system_prompt: str, user_message: str) -> str:
     if not ollama:
         raise RuntimeError("Ollama Python package is not installed.")
-    response = ollama.chat(
+
+    ollama_host = os.getenv(
+        "OLLAMA_HOST",
+        "http://127.0.0.1:11434"
+    )
+
+    client = ollama.Client(host=ollama_host)
+
+    response = client.chat(
         model=OLLAMA_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -665,6 +673,7 @@ def answer_with_ollama(system_prompt: str, user_message: str) -> str:
         },
         keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "5m"),
     )
+
     return response["message"]["content"].strip()
 
 
