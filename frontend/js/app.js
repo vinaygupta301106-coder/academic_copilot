@@ -4143,7 +4143,7 @@
         "Failed to fetch"
       )
     ) {
-      return ""FastAPI is unreachable. Please check your internet connection and try again.";
+      return "FastAPI is unreachable. Please check your internet connection and try again.";
     }
 
     return msg;
