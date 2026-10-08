@@ -142,7 +142,16 @@
 
       if (!response.ok) {
         let detail = "";
-        try { detail = (await response.json())?.detail || ""; } catch {}
+        try {
+          const errData = await response.json();
+          detail = errData?.detail || errData?.message || "";
+        } catch {
+          if (response.status === 502) {
+            detail = "The AI service is temporarily unavailable (502 Bad Gateway). Please try again in a few moments.";
+          } else if (response.status === 504) {
+            detail = "The AI service timed out. Please try again.";
+          }
+        }
         throw new Error(detail || `Copilot request failed (${response.status})`);
       }
 
@@ -152,9 +161,13 @@
       const usageText = (typeof data?.usage_count === "number" && typeof data?.daily_limit === "number")
         ? ` • ${data.usage_count}/${data.daily_limit} today`
         : "";
-      setText("llm-status", `${data?.llm_provider || "LLM"} • ${latency} ms${usageText}`);
+      if (data?.fallback_used) {
+        setText("llm-status", `Policy Engine • ${latency} ms (Fallback)`);
+      } else {
+        setText("llm-status", `${data?.llm_provider || "LLM"} • ${latency} ms${usageText}`);
+      }
       appendMessage("assistant", answer);
-      renderSources(data?.sources || []);
+      renderSources(data?.sources || [], data?.provenance);
       conversationHistory.push({ role: "user", content: text });
       conversationHistory.push({ role: "assistant", content: answer });
       conversationHistory = conversationHistory.slice(-6);
@@ -257,6 +270,9 @@
 
   function friendlyError(err) {
     const message = err?.message || "Unknown error.";
+    if (message.includes("<!DOCTYPE") || message.includes("<html") || message.includes("502 Bad Gateway") || message.includes("502")) {
+      return "The AI engine is temporarily unreachable or restarting. Prerequisite checks and degree planning continue to operate using verified deterministic rules.";
+    }
     if (message.includes("Failed to fetch")) {
       return "The frontend cannot reach the FastAPI server. Please check your internet connection and try again.";
     }

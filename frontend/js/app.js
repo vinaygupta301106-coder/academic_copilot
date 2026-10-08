@@ -12,6 +12,7 @@
   }
 
   const DEGREE_CREDITS = 120;
+  let copilotOpen = false;
 
   const state = {
     apiBase: API_BASE,
@@ -56,19 +57,21 @@
 
     /*
      * IMPORTANT:
-     * Copilot must start closed.
+     * Copilot must start closed on initial load and refresh.
      * It should only open when the user explicitly asks for it.
      */
+    copilotOpen = false;
     minimizeCopilot();
 
     await loadInitialData();
     await loadAdvisorWorkflow();
 
-    window.setInterval(() => loadAdvisorWorkflow({ silent: true }), 8000);
-
-    if (state.demoRole === "Student") {
-      window.setInterval(() => loadAuditOnly().catch(() => {}), 8000);
-    }
+    // Controlled advisor sync only; never refresh student recommendations in a loop
+    window.setInterval(() => {
+      if (state.demoRole !== "Student") {
+        loadAdvisorWorkflow({ silent: true }).catch(() => {});
+      }
+    }, 15000);
   }
 
   function bindUI() {
@@ -485,12 +488,6 @@
   }
 
   async function selectStudent(student) {
-    /*
-     * Selecting/loading a student is a normal dashboard operation.
-     * Do not automatically open Copilot.
-     */
-    minimizeCopilot();
-
     state.currentUser = student;
     state.completedCodes = new Set();
     state.enrolledCodes = new Set();
@@ -512,9 +509,13 @@
     showCourseError(false);
 
     try {
+      const deptParam = student.department
+        ? `?department=${encodeURIComponent(student.department)}`
+        : "";
+
       const [coursesData, auditData] =
         await Promise.all([
-          fetchJson(`${API_BASE}/courses/`),
+          fetchJson(`${API_BASE}/courses/${deptParam}`),
           fetchJson(
             `${API_BASE}/students/${encodeURIComponent(
               student.id
@@ -639,12 +640,6 @@
 
   async function loadAuditOnly() {
     if (!state.currentUser) return;
-
-    /*
-     * Automatic audit/recommendation refresh must NEVER
-     * open the Copilot.
-     */
-    minimizeCopilot();
 
     const data = await fetchJson(
       `${API_BASE}/students/${encodeURIComponent(
@@ -1151,12 +1146,28 @@
 
     document
       .querySelectorAll("[data-student-only]")
-      .forEach((el) =>
+      .forEach((el) => {
+        if (el.id === "copilot") return;
         el.classList.toggle(
           "hidden",
           staff
-        )
-      );
+        );
+      });
+
+    const copilotPanel = document.getElementById("copilot");
+    const copilotLauncher = document.getElementById("copilot-launcher");
+    if (staff) {
+      copilotPanel?.classList.add("hidden");
+      copilotLauncher?.classList.add("hidden");
+    } else {
+      if (copilotOpen) {
+        copilotPanel?.classList.remove("hidden");
+        copilotLauncher?.classList.add("hidden");
+      } else {
+        copilotPanel?.classList.add("hidden");
+        copilotLauncher?.classList.remove("hidden");
+      }
+    }
 
     document
       .getElementById(
@@ -1222,6 +1233,7 @@
    */
   function openCopilot() {
     if (state.demoRole !== "Student") return;
+    copilotOpen = true;
 
     const panel =
       document.getElementById("copilot");
@@ -1259,13 +1271,17 @@
    * Recommendation Dashboard never forces it open.
    */
   function minimizeCopilot() {
+    copilotOpen = false;
+
     document
       .getElementById("copilot")
       ?.classList.add("hidden");
 
-    document
-      .getElementById("copilot-launcher")
-      ?.classList.remove("hidden");
+    if (state.demoRole === "Student") {
+      document
+        .getElementById("copilot-launcher")
+        ?.classList.remove("hidden");
+    }
   }
 
   async function requestAdvisorApproval(code) {
@@ -2409,6 +2425,8 @@
         0
       );
 
+    const remainingCredits = Math.max(DEGREE_CREDITS - completedCredits, 0);
+
     const progress = Math.min(
       100,
       Math.round(
@@ -2452,6 +2470,29 @@
       "credits-percent",
       `${progress}% of degree target`
     );
+
+    // Progressive Degree Requirement Audit section
+    setText(
+      "summary-credits-completed",
+      completedCredits
+    );
+
+    setText(
+      "summary-credits-remaining",
+      remainingCredits
+    );
+
+    setText(
+      "summary-progress-percent",
+      `${progress}%`
+    );
+
+    setText(
+      "degree-dept-badge",
+      state.currentUser?.department || state.currentUser?.track || "Curriculum"
+    );
+
+    renderSemesterCreditsBreakdown(completed);
 
     setText(
       "progress-text",
@@ -2527,6 +2568,54 @@
     lucide.createIcons();
   }
 
+  function renderSemesterCreditsBreakdown(completedCourses) {
+    const grid = document.getElementById("semester-credits-grid");
+    if (!grid) return;
+
+    const completedCodes = new Set(
+      (completedCourses || []).map((c) => String(c.code).toUpperCase())
+    );
+
+    const semesterMap = {};
+    for (let sem = 1; sem <= 8; sem++) {
+      semesterMap[sem] = { totalCredits: 0, completedCredits: 0, totalCourses: 0, completedCourses: 0 };
+    }
+
+    state.courses.forEach((c) => {
+      const sem = Number(c.semester) || 1;
+      if (semesterMap[sem]) {
+        const credits = Number(c.credits || 0);
+        semesterMap[sem].totalCredits += credits;
+        semesterMap[sem].totalCourses += 1;
+        if (completedCodes.has(String(c.code).toUpperCase())) {
+          semesterMap[sem].completedCredits += credits;
+          semesterMap[sem].completedCourses += 1;
+        }
+      }
+    });
+
+    grid.innerHTML = [1, 2, 3, 4, 5, 6, 7, 8].map((sem) => {
+      const data = semesterMap[sem] || { totalCredits: 15, completedCredits: 0 };
+      const total = data.totalCredits || 15;
+      const comp = data.completedCredits;
+      const isComplete = comp >= total && comp > 0;
+      const isCurrent = Number(state.currentUser?.semester || 1) === sem;
+
+      return `
+        <div class="rounded-xl border ${isComplete ? 'border-emerald-400/30 bg-emerald-500/10' : isCurrent ? 'border-cyan-400/40 bg-cyan-500/10' : 'border-white/10 bg-black/30'} p-3 flex flex-col justify-between">
+          <div class="flex items-center justify-between text-[11px] font-semibold">
+            <span class="${isCurrent ? 'text-cyan-300' : isComplete ? 'text-emerald-300' : 'text-slate-400'}">Sem ${sem}</span>
+            ${isComplete ? '<span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>' : isCurrent ? '<span class="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse"></span>' : ''}
+          </div>
+          <div class="mt-2">
+            <div class="text-sm font-bold text-white">${comp} <span class="text-[10px] font-normal text-slate-400">/ ${total} cr</span></div>
+            <div class="text-[9px] text-slate-400 mt-0.5">${isComplete ? 'Completed' : isCurrent ? 'Current' : `${Math.max(total - comp, 0)} cr left`}</div>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
   function renderReady(courses) {
     const container =
       document.getElementById(
@@ -2567,6 +2656,10 @@
                     ${escapeHtml(
                       course.code
                     )}
+                  </span>
+
+                  <span class="badge badge-slate text-[10px]">
+                    Sem ${Number(course.semester || 1)}
                   </span>
 
                   <span class="status-badge ready">
@@ -2719,6 +2812,10 @@
                     ${escapeHtml(
                       course.code
                     )}
+                  </span>
+
+                  <span class="badge badge-slate text-[10px]">
+                    Sem ${Number(course.semester || 1)}
                   </span>
 
                   <span class="status-badge locked">
@@ -3623,6 +3720,8 @@
     const student =
       state.currentUser || {};
 
+    const deptText = student.department || student.track || "AI & Data Science";
+
     setText(
       "display-user-name",
       student.name ||
@@ -3637,16 +3736,22 @@
 
     setText(
       "display-user-track",
-      student.track ||
-        "Academic Track"
+      deptText
     );
 
     setText(
       "summary-track",
-      `Track: ${
-        student.track ||
-        "Academic Track"
-      }`
+      `Track: ${deptText}`
+    );
+
+    setText(
+      "summary-semester",
+      `Semester ${student.semester || 1} of 8`
+    );
+
+    setText(
+      "degree-dept-badge",
+      deptText
     );
 
     setText(
@@ -3782,7 +3887,7 @@
 
       setText(
         "details-subjects",
-        "AI & Data Science curriculum (semester-based)"
+        `${student.department || student.track || "Curriculum"} curriculum (semester-based)`
       );
 
       setText(
@@ -3810,12 +3915,20 @@
     }
   }
 
-  function openAddStudentModal() {
+  async function openAddStudentModal() {
     document
       .getElementById(
         "add-student-form"
       )
       ?.reset();
+
+    const deptSelect = document.getElementById("student-department-select");
+    const trackInput = document.getElementById("student-track-input");
+    const semSelect = document.getElementById("student-semester-input");
+
+    if (deptSelect && trackInput) {
+      trackInput.value = deptSelect.value;
+    }
 
     document
       .getElementById(
@@ -3824,6 +3937,23 @@
       ?.classList.remove(
         "hidden"
       );
+
+    await populateAddStudentCourses();
+
+    if (deptSelect && !deptSelect._hasChangeListener) {
+      deptSelect._hasChangeListener = true;
+      deptSelect.addEventListener("change", async () => {
+        if (trackInput) trackInput.value = deptSelect.value;
+        await populateAddStudentCourses();
+      });
+    }
+
+    if (semSelect && !semSelect._hasChangeListener) {
+      semSelect._hasChangeListener = true;
+      semSelect.addEventListener("change", async () => {
+        await populateAddStudentCourses();
+      });
+    }
 
     setTimeout(
       () =>
@@ -3834,6 +3964,69 @@
           ?.focus(),
       50
     );
+  }
+
+  async function populateAddStudentCourses() {
+    const picker = document.getElementById("student-courses-picker");
+    const deptSelect = document.getElementById("student-department-select");
+    const semSelect = document.getElementById("student-semester-input");
+    const countEl = document.getElementById("selected-completed-count");
+    if (!picker) return;
+
+    const dept = deptSelect?.value || "AI & Data Science";
+    const curSem = Number(semSelect?.value || 1);
+
+    picker.innerHTML = '<div class="col-span-2 py-3 text-center text-xs text-slate-500">Loading curriculum courses...</div>';
+
+    try {
+      const data = await fetchJson(`${API_BASE}/courses/curriculum?department=${encodeURIComponent(dept)}`);
+      const semCourses = data?.curriculum || {};
+
+      const eligibleList = [];
+      for (let s = 1; s <= 8; s++) {
+        const list = semCourses[s] || [];
+        list.forEach((c) => {
+          eligibleList.push({ ...c, semester: s });
+        });
+      }
+
+      if (!eligibleList.length) {
+        picker.innerHTML = '<div class="col-span-2 py-3 text-center text-xs text-slate-500">No courses defined for this department.</div>';
+        return;
+      }
+
+      picker.innerHTML = eligibleList.map((c) => {
+        // Pre-check courses if their semester is strictly before the selected current semester
+        const isPreceding = c.semester < curSem;
+        return `
+          <label class="flex items-center gap-2 p-1.5 rounded hover:bg-white/5 cursor-pointer text-slate-300">
+            <input type="checkbox" class="add-student-course-cb accent-cyan-400" value="${escapeAttr(c.code)}" data-credits="${Number(c.credits || 0)}" ${isPreceding ? "checked" : ""} />
+            <span class="font-mono text-cyan-300 font-bold">${escapeHtml(c.code)}</span>
+            <span class="truncate text-[11px]">${escapeHtml(c.name)}</span>
+            <span class="text-[10px] text-slate-500 ml-auto whitespace-nowrap">Sem ${c.semester} • ${c.credits}cr</span>
+          </label>
+        `;
+      }).join("");
+
+      const updateCount = () => {
+        const checked = picker.querySelectorAll(".add-student-course-cb:checked");
+        let totalCredits = 0;
+        checked.forEach((cb) => {
+          totalCredits += Number(cb.dataset.credits || 0);
+        });
+        if (countEl) {
+          countEl.textContent = `${checked.length} selected (${totalCredits} credits)`;
+        }
+      };
+
+      picker.querySelectorAll(".add-student-course-cb").forEach((cb) => {
+        cb.addEventListener("change", updateCount);
+      });
+      updateCount();
+    } catch (err) {
+      console.error(err);
+      picker.innerHTML = '<div class="col-span-2 py-3 text-center text-xs text-rose-400">Failed to load courses.</div>';
+    }
   }
 
   async function handleCreateStudent(
@@ -3852,6 +4045,20 @@
         "Creating...";
     }
 
+    const picker = document.getElementById("student-courses-picker");
+    const selectedCourses = [];
+    picker?.querySelectorAll(".add-student-course-cb:checked").forEach((cb) => {
+      selectedCourses.push(cb.value);
+    });
+
+    const dept =
+      document
+        .getElementById(
+          "student-department-select"
+        )
+        ?.value.trim() ||
+      "AI & Data Science";
+
     const payload = {
       name:
         document
@@ -3868,12 +4075,9 @@
           ?.value.trim() ||
         null,
 
-      department:
-        document
-          .getElementById(
-            "student-department-input"
-          )
-          ?.value.trim(),
+      department: dept,
+
+      track: dept,
 
       semester: Number(
         document
@@ -3881,7 +4085,9 @@
             "student-semester-input"
           )
           ?.value || 1
-      )
+      ),
+
+      completed_courses: selectedCourses
     };
 
     try {
@@ -3925,7 +4131,7 @@
       closeStudentModal();
 
       showToast(
-        `Student ${created.name} created with ID ${created.id}.`,
+        `Student ${created.name} (${created.department}) created with ID ${created.id}.`,
         "success"
       );
 

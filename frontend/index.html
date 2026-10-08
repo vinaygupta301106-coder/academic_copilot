@@ -173,6 +173,31 @@
           </div>
         </section>
 
+        <!-- Degree Requirements & Progressive Audit (120 credits) -->
+        <section id="degree-progress-section" data-student-only class="glass-panel rounded-2xl p-4 sm:p-5">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-white/10 pb-4">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">Degree Requirement Audit</span>
+                <span id="degree-dept-badge" class="badge badge-indigo">Department Curriculum</span>
+              </div>
+              <h2 class="font-display text-lg font-bold text-white mt-1">120 Total Credits Required</h2>
+            </div>
+            <div class="flex flex-wrap items-center gap-4 text-xs">
+              <div class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-emerald-400"></span><span><b id="summary-credits-completed">0</b> Credits Completed</span></div>
+              <div class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-cyan-400"></span><span><b id="summary-credits-remaining">120</b> Credits Remaining</span></div>
+              <div class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-violet-400"></span><span><b id="summary-progress-percent">0%</b> Degree Progress</span></div>
+            </div>
+          </div>
+          <!-- Progressive Semester Breakdown (Semesters 1-8) -->
+          <div class="mt-4">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2.5">Progressive Semester Breakdown (Semesters 1 – 8)</div>
+            <div id="semester-credits-grid" class="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
+              <!-- Dynamically populated: Semester 1 -> XX credits ... Semester 8 -> XX credits -->
+            </div>
+          </div>
+        </section>
+
         <!-- Recommendation dashboard -->
         <section id="recommendations" data-student-only class="glass-panel rounded-2xl p-4 sm:p-6">
           <div class="flex flex-col gap-4 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
@@ -389,7 +414,7 @@
       </section>
 
       <!-- Floating Copilot -->
-      <aside id="copilot" data-student-only class="copilot-float glass-panel hidden" aria-label="AI Academic Advisor">
+      <aside id="copilot" class="copilot-float glass-panel hidden" aria-label="AI Academic Advisor">
         <div class="flex items-center justify-between border-b border-white/10 bg-white/[0.02] p-4">
           <div class="flex items-center gap-3 min-w-0">
             <div class="ai-icon"><i data-lucide="sparkles" class="h-4 w-4"></i></div>
@@ -500,17 +525,48 @@
         <div>
           <div class="text-[10px] font-bold uppercase tracking-[0.14em] text-violet-300">Student Management</div>
           <h2 id="add-student-title" class="mt-1 font-display text-lg font-bold">Add New Student</h2>
-          <p class="mt-1 text-xs text-slate-500">Create a persistent profile. Track is automatically set to AI &amp; Data Science.</p>
+          <p class="mt-1 text-xs text-slate-500">Create a persistent student profile with department, semester, and completed courses.</p>
         </div>
         <button id="close-student-modal-btn" type="button" class="icon-btn"><i data-lucide="x" class="h-4 w-4"></i></button>
       </div>
       <form id="add-student-form" class="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2">
         <label class="form-label">Full Name<input id="student-name-input" class="input-field" required maxlength="100" placeholder="e.g. Aisha Khan"></label>
         <label class="form-label">Email<input id="student-email-input" class="input-field" type="email" placeholder="student@example.com"></label>
-        <label class="form-label">Department<input id="student-department-input" class="input-field" required maxlength="120" placeholder="Computer Science"></label>
-        <label class="form-label">Track<input id="student-track-input" class="input-field opacity-70" value="AI & Data Science" readonly></label>
-        <label class="form-label">Semester<input id="student-semester-input" class="input-field" type="number" min="1" max="8" value="1" required></label>
-        <div class="sm:col-span-2 rounded-lg border border-cyan-400/10 bg-cyan-400/[0.03] p-3 text-[10px] leading-5 text-slate-500">Track is fixed to AI &amp; Data Science. Semester is used to guide the curriculum view and Copilot recommendations. No subjects need to be entered here.</div>
+        <label class="form-label">Department
+          <select id="student-department-select" class="input-field" required>
+            <option value="Information Technology">Information Technology</option>
+            <option value="Computer Science">Computer Science</option>
+            <option value="AI & Data Science" selected>AI & Data Science</option>
+          </select>
+        </label>
+        <label class="form-label">Track / Program
+          <input id="student-track-input" class="input-field opacity-75" value="AI & Data Science" readonly>
+        </label>
+        <label class="form-label">Current Semester
+          <select id="student-semester-input" class="input-field" required>
+            <option value="1" selected>Semester 1</option>
+            <option value="2">Semester 2</option>
+            <option value="3">Semester 3</option>
+            <option value="4">Semester 4</option>
+            <option value="5">Semester 5</option>
+            <option value="6">Semester 6</option>
+            <option value="7">Semester 7</option>
+            <option value="8">Semester 8</option>
+          </select>
+        </label>
+        <div class="form-label text-[10px] text-slate-400 flex items-center">
+          <span>Curriculum requirement: 120 total credits progressive across Semesters 1 to 8.</span>
+        </div>
+        <div class="sm:col-span-2">
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-xs font-semibold text-slate-300">Completed Foundation Courses</span>
+            <span id="selected-completed-count" class="text-[10px] text-cyan-300 font-medium">0 selected (0 credits)</span>
+          </div>
+          <p class="text-[10px] text-slate-400 mb-2">Check courses already passed by this student. Courses update automatically based on department curriculum.</p>
+          <div id="student-courses-picker" class="max-h-44 overflow-y-auto rounded-lg border border-white/10 bg-black/40 p-2.5 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            <!-- Populated dynamically via JS -->
+          </div>
+        </div>
         <div class="sm:col-span-2 flex justify-end gap-2 border-t border-white/10 pt-3">
           <button type="button" class="secondary-btn" onclick="document.getElementById('add-student-modal').classList.add('hidden')">Cancel</button>
           <button id="create-student-btn" type="submit" class="primary-btn"><i data-lucide="user-plus" class="h-3.5 w-3.5"></i> Create Student</button>

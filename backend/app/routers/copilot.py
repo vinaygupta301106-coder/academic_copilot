@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 from neo4j import GraphDatabase
 
 from app.security import inspect_ai_input, require_student_scope, require_session
+from app import curriculum
 
 from app.config import (
     MYSQL_DATABASE_URL,
@@ -303,37 +304,69 @@ def _release_ai_question(student_id: int):
 
 
 def build_catalog(track: str):
-    """Return the verified course catalog and prerequisite graph for the selected track."""
-    driver = get_neo4j_driver()
+    """Return the verified course catalog and prerequisite graph for the selected department/track."""
+    dept = curriculum.normalize_department(track)
+    dept_curriculum = curriculum.get_curriculum(dept)
+    rows = []
     try:
-        with driver.session() as session:
-            query = """
-            MATCH (c:Course)
-            OPTIONAL MATCH (t:Track {name: $track})<-[:BELONGS_TO_TRACK]-(tc:Course)
-            WHERE tc IS NOT NULL AND tc.code = c.code
-            OPTIONAL MATCH (prereq:Course)-[:PREREQUISITE_FOR]->(c)
-            RETURN c.code AS code,
-                   c.name AS name,
-                   c.credits AS credits,
-                   c.min_grade AS min_grade,
-                   c.semester AS semester,
-                   collect(DISTINCT prereq.code) AS prereqs
-            ORDER BY c.code
-            """
-            rows = [record.data() for record in session.run(query, track=track)]
-            # If the graph does not have track relationships, use the complete Course catalog.
-            if not rows:
-                rows = [record.data() for record in session.run("""
-                    MATCH (c:Course)
-                    OPTIONAL MATCH (prereq:Course)-[:PREREQUISITE_FOR]->(c)
-                    RETURN c.code AS code, c.name AS name, c.credits AS credits,
-                           c.min_grade AS min_grade, c.semester AS semester,
-                           collect(DISTINCT prereq.code) AS prereqs
-                    ORDER BY c.code
-                """)]
-            return rows
-    finally:
-        driver.close()
+        driver = get_neo4j_driver()
+        try:
+            with driver.session() as session:
+                query = """
+                MATCH (c:Course)
+                OPTIONAL MATCH (prereq:Course)-[:PREREQUISITE_FOR]->(c)
+                RETURN c.code AS code,
+                       c.name AS name,
+                       c.credits AS credits,
+                       c.min_grade AS min_grade,
+                       c.semester AS semester,
+                       c.department AS department,
+                       collect(DISTINCT prereq.code) AS prereqs
+                ORDER BY c.code
+                """
+                rows = [record.data() for record in session.run(query)]
+        finally:
+            driver.close()
+    except Exception:
+        pass
+
+    if not rows:
+        return [
+            {
+                "code": c["code"],
+                "name": c["name"],
+                "credits": c["credits"],
+                "min_grade": c.get("min_grade", "C"),
+                "semester": c["semester"],
+                "department": c["department"],
+                "prereqs": c["prerequisites"]
+            }
+            for c in dept_curriculum
+        ]
+
+    # Ensure all department courses are present with proper semester and credits
+    row_map = {str(r["code"]).upper(): r for r in rows if r.get("code")}
+    for c in dept_curriculum:
+        code_u = c["code"].upper()
+        if code_u not in row_map:
+            rows.append({
+                "code": c["code"],
+                "name": c["name"],
+                "credits": c["credits"],
+                "min_grade": c.get("min_grade", "C"),
+                "semester": c["semester"],
+                "department": c["department"],
+                "prereqs": c["prerequisites"]
+            })
+        else:
+            if row_map[code_u].get("semester") is None:
+                row_map[code_u]["semester"] = c["semester"]
+            if row_map[code_u].get("credits") is None:
+                row_map[code_u]["credits"] = c["credits"]
+            if row_map[code_u].get("department") is None:
+                row_map[code_u]["department"] = c["department"]
+
+    return rows
 
 
 def _normalize_catalog(rows):
@@ -360,8 +393,9 @@ def _audit(catalog, completed):
     for course in catalog:
         if course["code"] in completed_valid:
             continue
-        missing = [p for p in course["prereqs"] if p in valid_codes and p not in completed_valid]
-        item = {**course, "missing_prerequisites": missing}
+        course_prereqs = [str(p).upper() for p in (course.get("prereqs") or course.get("prerequisites") or []) if p]
+        missing = [p for p in course_prereqs if p in valid_codes and p not in completed_valid]
+        item = {**course, "prereqs": course_prereqs, "missing_prerequisites": missing}
         if not missing:
             ready.append(item)
         else:
@@ -558,64 +592,161 @@ def _course_info_answer(question, student, catalog, completed):
 
 
 def _deterministic_answer(question, student, catalog, completed):
-    """Answer fact-based questions without consuming an Ollama request."""
+    """Answer fact-based questions without consuming an Ollama request or counting against daily AI limit."""
     q = question.lower().strip()
     completed_valid, ready, locked = _audit(catalog, completed)
+    by_code = {c["code"]: c for c in catalog}
+    dept = curriculum.normalize_department(student.get("department") or student.get("track"))
 
+    # 1. Degree Progress & Credits (120-credit requirement)
+    asks_credits_remaining = any(x in q for x in ["credits remain", "remaining credit", "credits left", "credits do i need", "credits needed"])
+    asks_credits_completed = any(x in q for x in ["credits have i", "credits completed", "completed credit", "credits earned", "earned credit", "how many credits"])
+    asks_progress = any(x in q for x in ["my progress", "progress in my degree", "how am i progressing", "degree progress", "120 credit", "degree requirement"])
+    asks_remaining_courses = any(x in q for x in ["courses are remaining", "courses remain", "courses left", "remaining course"])
+
+    if asks_credits_remaining or asks_credits_completed or asks_progress or asks_remaining_courses:
+        progress_info = curriculum.calculate_progress(completed_valid, dept)
+        completed_cr = progress_info["completed_credits"]
+        remaining_cr = progress_info["remaining_credits"]
+        pct = progress_info["progress_percentage"]
+
+        if asks_remaining_courses:
+            total_courses = len(catalog)
+            done_count = len(completed_valid)
+            rem_count = max(0, total_courses - done_count)
+            return (
+                f"You have completed {done_count} course(s) out of {total_courses} courses in the {dept} curriculum. "
+                f"You have {rem_count} course(s) remaining ({completed_cr:g} completed credits, {remaining_cr:g} credits remaining towards the 120-credit degree target)."
+            )
+        if asks_credits_remaining:
+            return (
+                f"You have {remaining_cr:g} credits remaining to fulfill your 120-credit degree requirement "
+                f"({completed_cr:g} credits completed, {pct}% degree progress)."
+            )
+        if asks_credits_completed:
+            return (
+                f"You have completed {completed_cr:g} credits towards your 120-credit degree requirement "
+                f"({remaining_cr:g} credits remaining, {pct}% degree progress)."
+            )
+        return (
+            f"Degree Progress Summary for {student['name']} ({dept}, Semester {student['semester']}):\n"
+            f"• Degree Target: 120 Credits Required\n"
+            f"• Credits Completed: {completed_cr:g} ({len(completed_valid)} completed courses)\n"
+            f"• Credits Remaining: {remaining_cr:g}\n"
+            f"• Degree Completion: {pct}%"
+        )
+
+    # 2. Completed Courses Inquiry
+    asks_completed = any(x in q for x in ["completed course", "courses have i completed", "courses i have passed", "courses have i taken", "courses taken"])
+    if asks_completed:
+        if not completed_valid:
+            return f"No completed courses are recorded for your {dept} curriculum yet."
+        details = [f"{code} — {by_code[code]['name']}" for code in sorted(completed_valid) if code in by_code]
+        return f"Your completed curriculum courses ({len(completed_valid)} total) are: " + "; ".join(details) + "."
+
+    # 3. Courses Unlocked by Completing a Course
+    asks_unlock = any(x in q for x in ["unlocked if", "unlock if", "what does", "courses are unlocked", "what is unlocked"])
+    if asks_unlock:
+        target = _find_course(question, catalog)
+        if target:
+            unlocked = []
+            for c in catalog:
+                if target["code"] in c.get("prereqs", []):
+                    unlocked.append(f"{c['code']} — {c['name']}")
+            if unlocked:
+                return f"Completing {target['code']} ({target['name']}) unlocks the following course(s): " + "; ".join(unlocked) + "."
+            return f"{target['code']} ({target['name']}) does not directly gate any subsequent required courses in your verified curriculum."
+
+    # 4. Course Comparisons
+    comparison_words = ["which is better", "which should i choose", "what should i choose", "which one should i take", "compare", "better out of", "which is best", "priority for me right now"]
+    if any(x in q for x in comparison_words):
+        comparison = _comparison_answer(question, student, catalog, completed)
+        if comparison:
+            return comparison
+
+    # 5. Course Eligibility, Missing Prerequisites, and Why Locked
     target = _find_course(question, catalog)
+    asks_why_locked = any(x in q for x in ["why is", "why locked", "locked?", "unavailable?"]) and target
     asks_eligibility = any(x in q for x in [
         "eligible", "eligibility", "can i take", "can i enroll", "allowed to take"
     ])
     asks_missing = "missing prerequisite" in q or "missing prerequisites" in q or (
         "prerequisite" in q and any(x in q for x in ["missing", "need", "needed"])
     )
-    asks_progress = any(x in q for x in [
-        "my progress", "how am i progressing", "progress in my degree",
-        "credits have i", "how many credits"
-    ])
-    asks_completed = "completed courses" in q or "courses have i completed" in q
-    asks_next = "next semester" in q or "what should i take next" in q
 
-    comparison_words = ["which is better", "which should i choose", "what should i choose", "which one should i take", "compare", "better out of", "which is best"]
-    if any(x in q for x in comparison_words):
-        comparison = _comparison_answer(question, student, catalog, completed)
-        if comparison:
-            return comparison
-
-    if target and (asks_eligibility or asks_missing):
+    if target and (asks_eligibility or asks_missing or asks_why_locked):
         missing = [p for p in target["prereqs"] if p not in completed_valid]
+        if asks_why_locked or (target["code"] in [c["code"] for c in locked] and any(x in q for x in ["why", "reason", "locked", "unavailable"])):
+            if missing:
+                missing_names = [f"{p} — {by_code.get(p, {}).get('name', p)}" for p in missing]
+                return (
+                    f"{target['code']} — {target['name']} is currently locked because you have not completed "
+                    f"the required prerequisite(s): {', '.join(missing_names)}. Once satisfied, this course becomes eligible."
+                )
+            if target["code"] in completed_valid:
+                return f"{target['code']} — {target['name']} is already completed in your academic record."
+            return f"{target['code']} — {target['name']} is currently eligible for enrollment."
+
         if asks_missing:
             if missing:
-                names = []
-                by_code = {c["code"]: c for c in catalog}
-                for code in missing:
-                    names.append(f"{code} — {by_code.get(code, {}).get('name', code)}")
-                return (
-                    f"You are missing {len(missing)} prerequisite(s) for "
-                    f"{target['code']} — {target['name']}: " + "; ".join(names) + "."
-                )
+                names = [f"{code} — {by_code.get(code, {}).get('name', code)}" for code in missing]
+                return f"You are missing {len(missing)} prerequisite(s) for {target['code']} — {target['name']}: " + "; ".join(names) + "."
             return f"You are not missing any listed prerequisites for {target['code']} — {target['name']}."
-        if missing:
+
+        if asks_eligibility:
+            if target["code"] in completed_valid:
+                return f"You have already completed {target['code']} — {target['name']}."
+            if missing:
+                return (
+                    f"No. You are currently not eligible for {target['code']} — {target['name']}. "
+                    f"Missing prerequisite(s): {', '.join(missing)}."
+                )
+            return f"Yes. You are currently eligible for {target['code']} — {target['name']}. All listed prerequisites are satisfied."
+
+    # 6. Which Courses Am I Eligible For?
+    asks_all_eligible = any(x in q for x in ["which courses am i currently eligible", "what courses am i eligible for", "courses am i eligible", "currently eligible to take", "eligible courses"])
+    if asks_all_eligible and not target:
+        if not ready:
+            return "You do not currently have any eligible courses available in your curriculum. Consult your academic advisor."
+        names = [f"{c['code']} — {c['name']} ({c['credits']} cr, Semester {c.get('semester')})" for c in ready[:8]]
+        return f"You are currently eligible to take {len(ready)} course(s): " + "; ".join(names) + "."
+
+    # 7. What Should I Prioritize / Complete First?
+    asks_priority = any(x in q for x in ["prioritize", "complete first", "take first", "stay on track"])
+    if asks_priority:
+        rec_data = _recommendation_engine(catalog, student, completed)
+        recs = rec_data.get("recommendations", [])
+        if recs:
+            top_rec = recs[0]
+            other_recs = [f"{r['code']} — {r['name']}" for r in recs[1:4]]
+            others_str = f" Other strong options include: {'; '.join(other_recs)}." if other_recs else ""
             return (
-                f"No. You are currently not eligible for {target['code']} — {target['name']}. "
-                f"Missing prerequisite(s): {', '.join(missing)}."
+                f"Based on your prerequisite chain and current semester ({student['semester']}), you should prioritize "
+                f"**{top_rec['code']} — {top_rec['name']}** ({top_rec['credits']} credits, Semester {top_rec.get('semester')}). "
+                f"Reason: {', '.join(top_rec.get('reasons', []))}." + others_str
             )
-        return f"Yes. You are currently eligible for {target['code']} — {target['name']}. All listed prerequisites are satisfied."
+        return "You currently have no uncompleted eligible courses. Review your degree progress with your advisor."
 
-    if asks_completed:
-        if not completed_valid:
-            return "No completed courses from the current Neo4j curriculum are recorded for this student."
-        by_code = {c["code"]: c for c in catalog}
-        details = [f"{code} — {by_code[code]['name']}" for code in sorted(completed_valid)]
-        return "Your completed curriculum courses are: " + "; ".join(details) + "."
+    # 8. Which Eligible Courses Can I Take Together?
+    asks_together = any(x in q for x in ["take together", "together", "courses together", "combine"])
+    if asks_together:
+        if len(ready) >= 2:
+            subset = ready[:4]
+            total_sub_cr = sum(float(c.get("credits") or 0) for c in subset)
+            names = [f"{c['code']} — {c['name']} ({c['credits']} cr)" for c in subset]
+            return (
+                f"You can take the following eligible courses together for a standard semester load ({total_sub_cr:g} credits total): "
+                + "; ".join(names) + "."
+            )
 
-    if asks_progress:
-        by_code = {c["code"]: c for c in catalog}
-        credits = sum(float(by_code[c]["credits"] or 0) for c in completed_valid if c in by_code)
-        return (
-            f"You have completed {len(completed_valid)} curriculum course(s) "
-            f"for {credits:g} credits. Your current semester is {student['semester']}."
-        )
+    # 9. Next Semester / Specific Semester Courses
+    sem_match = re.search(r"semester\s*(\d)", q)
+    if sem_match:
+        target_sem = int(sem_match.group(1))
+        sem_courses = [c for c in catalog if int(c.get("semester") or 0) == target_sem]
+        if sem_courses:
+            names = [f"{c['code']} — {c['name']} ({c['credits']} cr)" for c in sem_courses]
+            return f"Curriculum courses for Semester {target_sem} in {dept}: " + "; ".join(names) + "."
 
     if asks_next:
         try:
@@ -631,8 +762,20 @@ def _deterministic_answer(question, student, catalog, completed):
         qualifier = f"matching semester {next_sem}" if eligible_next else "currently eligible"
         return f"Based on your verified curriculum, the {qualifier} course options are: " + "; ".join(names) + "."
 
-    # Any natural-language question that clearly points to one verified course gets
-    # a verified course card before we ever fall through to the LLM.
+    # 10. General Prerequisites
+    asks_general_prereqs = "prerequisite" in q and not target
+    if asks_general_prereqs:
+        locked_with_prereqs = [c for c in locked if c.get("missing_prerequisites")]
+        if locked_with_prereqs:
+            lines = [f"{c['code']} ({c['name']}) requires {', '.join(c['missing_prerequisites'])}" for c in locked_with_prereqs[:5]]
+            return "Here are the prerequisite requirements for your locked courses:\n• " + "\n• ".join(lines)
+        return "All your listed curriculum courses have satisfied prerequisites or are completed."
+
+    # 11. Current Semester / Department Inquiry
+    if any(x in q for x in ["my current semester", "current semester", "what semester am i in"]):
+        return f"Your current recorded status is Semester {student['semester']} in the {dept} department."
+
+    # 12. Single Recognized Course Info Card
     course_info = _course_info_answer(question, student, catalog, completed)
     if course_info:
         return course_info
@@ -652,29 +795,41 @@ def answer_with_ollama(system_prompt: str, user_message: str) -> str:
     if not ollama:
         raise RuntimeError("Ollama Python package is not installed.")
 
+    import time
     ollama_host = os.getenv(
         "OLLAMA_HOST",
         "http://127.0.0.1:11434"
     )
 
-    client = ollama.Client(host=ollama_host)
+    client = ollama.Client(host=ollama_host, timeout=18.0)
 
-    response = client.chat(
-        model=OLLAMA_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        options={
-            "num_gpu": 0,
-            "num_predict": int(os.getenv("OLLAMA_NUM_PREDICT", "250")),
-            "num_ctx": int(os.getenv("OLLAMA_NUM_CTX", "2048")),
-            "temperature": 0.1,
-        },
-        keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "5m"),
-    )
+    attempts = 0
+    max_attempts = 2
+    last_err = None
+    while attempts < max_attempts:
+        attempts += 1
+        try:
+            response = client.chat(
+                model=OLLAMA_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                options={
+                    "num_gpu": 0,
+                    "num_predict": int(os.getenv("OLLAMA_NUM_PREDICT", "250")),
+                    "num_ctx": int(os.getenv("OLLAMA_NUM_CTX", "2048")),
+                    "temperature": 0.1,
+                },
+                keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "5m"),
+            )
+            return response["message"]["content"].strip()
+        except Exception as exc:
+            last_err = exc
+            if attempts < max_attempts:
+                time.sleep(0.8)
 
-    return response["message"]["content"].strip()
+    raise last_err
 
 
 def _recommendation_engine(catalog, student, completed):
@@ -825,7 +980,8 @@ def get_recommendations(user_id: int, x_demo_role: str | None = Header(default=N
     if not student:
         raise HTTPException(status_code=404, detail="Student not found.")
     try:
-        catalog = _normalize_catalog(build_catalog(student["track"]))
+        student_dept = student.get("department") or student.get("track")
+        catalog = _normalize_catalog(build_catalog(student_dept))
         if not catalog:
             raise HTTPException(status_code=503, detail="No curriculum courses were found in Neo4j.")
         completed = _completed(user_id)
@@ -850,7 +1006,8 @@ def run_what_if(payload: WhatIfRequest, x_demo_role: str | None = Header(default
     if not student:
         raise HTTPException(status_code=404, detail="Student not found.")
     try:
-        catalog = _normalize_catalog(build_catalog(student["track"]))
+        student_dept = student.get("department") or student.get("track")
+        catalog = _normalize_catalog(build_catalog(student_dept))
         if not catalog:
             raise HTTPException(status_code=503, detail="No curriculum courses were found in Neo4j.")
         completed = _completed(payload.user_id)
@@ -882,7 +1039,8 @@ def chat_with_copilot(payload: ChatRequest, x_demo_role: str | None = Header(def
         raise HTTPException(status_code=404, detail="Student not found.")
 
     try:
-        catalog = _normalize_catalog(build_catalog(student["track"]))
+        student_dept = student.get("department") or student.get("track")
+        catalog = _normalize_catalog(build_catalog(student_dept))
         if not catalog:
             raise HTTPException(status_code=503, detail="No curriculum courses were found in Neo4j.")
 
@@ -1001,26 +1159,54 @@ of guessing.
 """
         try:
             response = answer_with_ollama(system_prompt, payload.user_message)
+            return {
+                "user_id": payload.user_id,
+                "user_message": payload.user_message,
+                "copilot_response": response,
+                "llm_provider": "Ollama (Qwen 0.5B)",
+                "ai_used": True,
+                "fallback_used": False,
+                "copilot_available": True,
+                "usage_count": usage_count,
+                "daily_limit": DAILY_LIMIT,
+                "sources": [
+                    {"source": "Neo4j curriculum knowledge graph", "scope": "Verified course/prerequisite facts supplied to the model"},
+                    {"source": "MySQL student record", "scope": "Verified student profile and completion records"},
+                    {"source": "Ollama (Qwen 0.5B)", "scope": "Natural-language synthesis only; not an authority for university policy"},
+                ],
+                "provenance": _source_provenance(payload.user_id, ai_used=True, course_codes=[c["code"] for c in mentioned_courses]),
+            }
         except Exception:
             _release_ai_question(payload.user_id)
-            raise
-
-        return {
-            "user_id": payload.user_id,
-            "user_message": payload.user_message,
-            "copilot_response": response,
-            "llm_provider": "Ollama (Qwen 0.5B)",
-            "ai_used": True,
-            "usage_count": usage_count,
-            "daily_limit": DAILY_LIMIT,
-            "sources": [
-                {"source": "Neo4j curriculum knowledge graph", "scope": "Verified course/prerequisite facts supplied to the model"},
-                {"source": "MySQL student record", "scope": "Verified student profile and completion records"},
-                {"source": "Ollama (Qwen 0.5B)", "scope": "Natural-language synthesis only; not an authority for university policy"},
-            ],
-            "provenance": _source_provenance(payload.user_id, ai_used=True, course_codes=[c["code"] for c in mentioned_courses]),
-        }
+            fallback_text = (
+                "AI explanation is temporarily unavailable. Your verified academic data and recommendations are still available.\n\n"
+                f"• Student: {student['name']}\n"
+                f"• Department: {student['department']}\n"
+                f"• Current Semester: {student['semester']}\n"
+                f"• Completed Courses: {len(completed_valid)} course(s)\n"
+                f"• Eligible Courses: {len(ready)} course(s) ready to enroll"
+            )
+            return {
+                "user_id": payload.user_id,
+                "user_message": payload.user_message,
+                "copilot_response": fallback_text,
+                "llm_provider": "Academic Rules Engine (Fallback)",
+                "ai_used": False,
+                "fallback_used": True,
+                "copilot_available": False,
+                "error_code": "AI_SERVICE_UNAVAILABLE",
+                "usage_count": _usage_count(payload.user_id),
+                "daily_limit": DAILY_LIMIT,
+                "sources": [
+                    {"source": "MySQL student record", "scope": "Verified student profile and completion records"},
+                    {"source": "Neo4j curriculum knowledge graph", "scope": "Verified curriculum requirements"},
+                ],
+                "provenance": _source_provenance(payload.user_id, ai_used=False, course_codes=[c["code"] for c in mentioned_courses]),
+            }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Copilot Error: {str(e)}")
+        clean_err = str(e)
+        if "<!DOCTYPE" in clean_err or "502" in clean_err or "Gateway" in clean_err:
+            clean_err = "The backend service is temporarily restarting. Please retry in a few moments."
+        raise HTTPException(status_code=500, detail=f"Copilot Error: {clean_err}")

@@ -8,6 +8,7 @@ from neo4j import GraphDatabase
 
 from app.config import MYSQL_DATABASE_URL, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD
 from app.security import require_student_scope, require_session, require_role_header
+from app import curriculum
 
 router = APIRouter(prefix="/api/v1/students", tags=["Students & Audit"])
 mysql_engine = create_engine(MYSQL_DATABASE_URL, pool_pre_ping=True)
@@ -23,6 +24,7 @@ class StudentCreate(BaseModel):
     department: str = Field(min_length=1, max_length=120)
     semester: int = Field(default=1, ge=1, le=8)
     role: str = Field(default="Student", max_length=50)
+    completed_courses: list[str] = Field(default_factory=list)
 
 
 
@@ -160,6 +162,7 @@ def list_students():
 @router.post("")
 def create_student(payload: StudentCreate):
     """Create a persistent student profile."""
+    dept = curriculum.normalize_department(payload.department)
     with mysql_engine.begin() as conn:
         result = conn.execute(text("""
             INSERT INTO copilot_students
@@ -169,13 +172,20 @@ def create_student(payload: StudentCreate):
         """), {
             "name": payload.name.strip(),
             "email": payload.email.strip() if payload.email else None,
-            "department": payload.department.strip(),
-            "track": "AI & Data Science",
+            "department": dept,
+            "track": dept,
             "semester": payload.semester,
-            "subjects": json.dumps([]),
+            "subjects": json.dumps(payload.completed_courses),
             "role": "Student",
         })
         student_id = result.lastrowid
+
+        for code in payload.completed_courses:
+            if code and str(code).strip():
+                conn.execute(text("""
+                    INSERT IGNORE INTO copilot_student_courses (student_id, course_code, status)
+                    VALUES (:student_id, :course_code, 'completed')
+                """), {"student_id": student_id, "course_code": str(code).strip().upper()})
 
     return {"status": "SUCCESS", "student": _public_student(_student_row(student_id))}
 
@@ -201,7 +211,7 @@ def get_student(user_id: int, x_demo_role: str | None = Header(default=None), x_
 def audit_student_progress(user_id: int, x_demo_role: str | None = Header(default=None), x_demo_student_id: str | None = Header(default=None), authorization: str | None = Header(default=None)):
     try: require_session(authorization, x_demo_role, x_demo_student_id)
     except PermissionError as exc: raise HTTPException(status_code=403, detail=str(exc))
-    """Read persistent completion state and calculate eligibility from the Neo4j graph."""
+    """Read persistent completion state and calculate eligibility from the Neo4j graph and department curriculum."""
     try:
         require_student_scope(x_demo_role, x_demo_student_id, user_id)
     except PermissionError as exc:
@@ -210,47 +220,96 @@ def audit_student_progress(user_id: int, x_demo_role: str | None = Header(defaul
     if not row:
         raise HTTPException(status_code=404, detail="Student not found.")
 
+    dept = curriculum.normalize_department(row.get("department"))
+    dept_curriculum = curriculum.get_curriculum(dept)
     completed_courses = _completed_courses(user_id)
     enrolled_courses = _enrolled_courses(user_id)
-    driver = get_neo4j_driver()
+
+    catalog = []
     try:
-        with driver.session() as session:
-            catalog_result = session.run("""
-                MATCH (c:Course)
-                OPTIONAL MATCH (prereq:Course)-[:PREREQUISITE_FOR]->(c)
-                RETURN c.code AS code, c.name AS name, c.credits AS credits,
-                       collect(DISTINCT prereq.code) AS required_prereqs
-                ORDER BY c.code
-            """)
-            catalog = [record.data() for record in catalog_result]
-            valid_codes = {str(item["code"]).upper() for item in catalog if item["code"]}
-            completed_valid = [code for code in completed_courses if code.upper() in valid_codes]
-            enrolled_valid = [code for code in enrolled_courses if code.upper() in valid_codes]
-            occupied = {c.upper() for c in completed_valid + enrolled_valid}
+        driver = get_neo4j_driver()
+        try:
+            with driver.session() as session:
+                catalog_result = session.run("""
+                    MATCH (c:Course)
+                    OPTIONAL MATCH (prereq:Course)-[:PREREQUISITE_FOR]->(c)
+                    RETURN c.code AS code, c.name AS name, c.credits AS credits,
+                           c.semester AS semester, c.department AS department,
+                           collect(DISTINCT prereq.code) AS required_prereqs
+                    ORDER BY c.code
+                """)
+                catalog = [record.data() for record in catalog_result]
+        finally:
+            driver.close()
+    except Exception:
+        pass
 
-            eligible = []
-            for item in catalog:
-                code = str(item["code"]).upper()
-                if code in occupied:
-                    continue
-                required = [str(p).upper() for p in (item["required_prereqs"] or []) if p]
-                if all(req in {c.upper() for c in completed_valid} for req in required):
-                    eligible.append({
-                        "code": code,
-                        "name": item["name"],
-                        "credits": item["credits"],
-                        "required_prereqs": required,
-                    })
-
-            return {
-                "user_id": user_id,
-                "student": _public_student(row),
-                "completed_courses": completed_valid,
-                "enrolled_courses": enrolled_valid,
-                "eligible_courses": eligible,
+    if not catalog:
+        catalog = [
+            {
+                "code": c["code"],
+                "name": c["name"],
+                "credits": c["credits"],
+                "semester": c["semester"],
+                "department": c["department"],
+                "required_prereqs": c["prerequisites"]
             }
-    finally:
-        driver.close()
+            for c in dept_curriculum
+        ]
+
+    # Ensure all courses from this student's department curriculum are in catalog
+    catalog_codes = {str(item["code"]).upper() for item in catalog if item.get("code")}
+    for c in dept_curriculum:
+        if c["code"].upper() not in catalog_codes:
+            catalog.append({
+                "code": c["code"],
+                "name": c["name"],
+                "credits": c["credits"],
+                "semester": c["semester"],
+                "department": c["department"],
+                "required_prereqs": c["prerequisites"]
+            })
+
+    valid_codes = {str(item["code"]).upper() for item in catalog if item.get("code")}
+    completed_valid = [code for code in completed_courses if code.upper() in valid_codes]
+    enrolled_valid = [code for code in enrolled_courses if code.upper() in valid_codes]
+    occupied = {c.upper() for c in completed_valid + enrolled_valid}
+
+    # Department-aware eligibility
+    dept_course_codes = {c["code"].upper() for c in dept_curriculum}
+    eligible = []
+    for item in catalog:
+        code = str(item["code"]).upper()
+        if code in occupied:
+            continue
+        if code not in dept_course_codes and item.get("department") and curriculum.normalize_department(item.get("department")) != dept:
+            continue
+        required = [str(p).upper() for p in (item.get("required_prereqs") or []) if p]
+        if all(req in {c.upper() for c in completed_valid} for req in required):
+            eligible.append({
+                "code": code,
+                "name": item.get("name") or code,
+                "credits": item.get("credits"),
+                "semester": item.get("semester"),
+                "department": item.get("department") or dept,
+                "required_prereqs": required,
+            })
+
+    progress_data = curriculum.calculate_progress(completed_valid, dept)
+
+    return {
+        "user_id": user_id,
+        "student": _public_student(row),
+        "department": dept,
+        "completed_courses": completed_valid,
+        "enrolled_courses": enrolled_valid,
+        "eligible_courses": eligible,
+        "total_required_credits": curriculum.DEGREE_REQUIRED_CREDITS,
+        "completed_credits": progress_data["completed_credits"],
+        "remaining_credits": progress_data["remaining_credits"],
+        "progress_percentage": progress_data["progress_percentage"],
+        "semester_breakdown": progress_data["semester_breakdown"],
+    }
 
 
 @router.post("/enroll")
@@ -272,19 +331,30 @@ def enroll_course(payload: EnrollRequest, x_demo_role: str | None = Header(defau
         raise HTTPException(status_code=404, detail="Student not found.")
     code = payload.course_code.strip().upper()
 
-    driver = get_neo4j_driver()
+    course_found = False
+    prerequisites = []
     try:
-        with driver.session() as session:
-            course_result = session.run("""
-                MATCH (c:Course {code: $code})
-                OPTIONAL MATCH (prereq:Course)-[:PREREQUISITE_FOR]->(c)
-                RETURN c.code AS code, c.name AS name, collect(DISTINCT prereq.code) AS prerequisites
-            """, code=code).single()
-            if not course_result:
-                raise HTTPException(status_code=404, detail=f"Course '{code}' not found.")
-            prerequisites = [str(p).upper() for p in (course_result["prerequisites"] or []) if p]
-    finally:
-        driver.close()
+        driver = get_neo4j_driver()
+        try:
+            with driver.session() as session:
+                course_result = session.run("""
+                    MATCH (c:Course {code: $code})
+                    OPTIONAL MATCH (prereq:Course)-[:PREREQUISITE_FOR]->(c)
+                    RETURN c.code AS code, c.name AS name, collect(DISTINCT prereq.code) AS prerequisites
+                """, code=code).single()
+                if course_result and course_result["code"]:
+                    course_found = True
+                    prerequisites = [str(p).upper() for p in (course_result["prerequisites"] or []) if p]
+        finally:
+            driver.close()
+    except Exception:
+        pass
+
+    if not course_found:
+        curr_course = curriculum.get_course(code)
+        if not curr_course:
+            raise HTTPException(status_code=404, detail=f"Course '{code}' not found.")
+        prerequisites = [str(p).upper() for p in curr_course.get("prerequisites", [])]
 
     completed = {c.upper() for c in _completed_courses(payload.user_id)}
     enrolled = {c.upper() for c in _enrolled_courses(payload.user_id)}
